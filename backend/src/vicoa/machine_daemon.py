@@ -34,7 +34,7 @@ from protocol.agent_catalog import (
     REASONING_EFFORTS,
     THINKING_EFFORTS,
 )
-from integrations.headless.generic_acp import GENERIC_ACP_AGENTS
+from integrations.headless.generic_acp import effective_acp_agents
 from integrations.headless.pi_family.spec import PI_FAMILY_AGENTS
 from vicoa.utils import derive_ws_url, get_project_path
 from vicoa.machine_identity import (
@@ -708,13 +708,30 @@ class MachineDaemon:
         """
         return {
             agent: self._check_agent_installation(agent) is None
-            for agent in (
-                "claude",
-                "codex",
-                "opencode",
-                *GENERIC_ACP_AGENTS,
-                *PI_FAMILY_AGENTS,
-            )
+            for agent in self._known_agent_ids()
+        }
+
+    @staticmethod
+    def _known_agent_ids() -> tuple[str, ...]:
+        """Every agent id this daemon can spawn, built-ins and config alike."""
+        return (
+            "claude",
+            "codex",
+            "opencode",
+            *effective_acp_agents(),
+            *PI_FAMILY_AGENTS,
+        )
+
+    def _agent_labels(self) -> dict[str, str]:
+        """Display name per agent id, for ids no client catalog can know.
+
+        A provider from `agents.providers` exists only in this machine's
+        config, so its label has to travel with `available_agents` or the
+        apps are left prettifying the id. Published alongside it, with the
+        same wholesale-replace semantics.
+        """
+        return {
+            agent: self._agent_display_name(agent) for agent in self._known_agent_ids()
         }
 
     def _capabilities(self) -> list[str]:
@@ -727,6 +744,11 @@ class MachineDaemon:
         `agent-scan` tells the app the `scan-agents` RPC is routable here,
         so the desktop agent scan can offer a Rescan button. An old daemon
         omits it and the button stays hidden rather than failing `no_handler`.
+
+        `provider-config` tells the app the `provider-*` RPCs are routable
+        here, so Settings → Providers can offer Add / Remove / Check for THIS
+        machine. An old daemon omits it and the page falls back to the
+        copy-the-install-command text.
 
         `file-index` tells the client the `scan-files` RPC is routable here,
         so `@`-mentions can read the live project index off this machine
@@ -776,6 +798,7 @@ class MachineDaemon:
         return [
             "worktree",
             "agent-scan",
+            "provider-config",
             "file-index",
             "command-index",
             "terminal",
@@ -825,6 +848,7 @@ class MachineDaemon:
                 "python_version": platform.python_version(),
                 "cwd": get_project_path(),
                 "available_agents": self._detect_available_agents(),
+                "agent_labels": self._agent_labels(),
                 "capabilities": self._capabilities(),
             },
         }
@@ -1067,7 +1091,8 @@ class MachineDaemon:
         args = ["--resume", session_id]
         if agent_session_id:
             flag = self._AGENT_SESSION_FLAG.get(
-                agent, "--acp-session-id" if agent in GENERIC_ACP_AGENTS else ""
+                agent,
+                "--acp-session-id" if agent in effective_acp_agents() else "",
             )
             if flag:
                 args.extend([flag, agent_session_id])
@@ -1173,7 +1198,7 @@ class MachineDaemon:
                 prompt = self._extract_prompt(metadata)
                 if prompt:
                     cmd.extend(["--prompt", prompt])
-            elif normalized_agent in GENERIC_ACP_AGENTS:
+            elif normalized_agent in effective_acp_agents():
                 model = self._extract_generic_model(metadata)
                 if model:
                     cmd.extend(["--model", model])
@@ -1313,8 +1338,8 @@ class MachineDaemon:
                 cmd.extend(["--prompt", prompt])
             return cmd
 
-        if normalized_agent in GENERIC_ACP_AGENTS:
-            spec = GENERIC_ACP_AGENTS[normalized_agent]
+        if normalized_agent in effective_acp_agents():
+            spec = effective_acp_agents()[normalized_agent]
             cmd = [
                 sys.executable,
                 "-m",
@@ -1397,7 +1422,7 @@ class MachineDaemon:
             "claude code": "claude",
             "codex": "codex",
             "opencode": "opencode",
-            **{agent_id: agent_id for agent_id in GENERIC_ACP_AGENTS},
+            **{agent_id: agent_id for agent_id in effective_acp_agents()},
             **{agent_id: agent_id for agent_id in PI_FAMILY_AGENTS},
             # Display-name spellings clients may send instead of the id.
             "oh my pi": "omp",
@@ -1411,7 +1436,7 @@ class MachineDaemon:
                     "claude",
                     "codex",
                     "opencode",
-                    *GENERIC_ACP_AGENTS,
+                    *effective_acp_agents(),
                     *PI_FAMILY_AGENTS,
                 ]
             )
@@ -1461,7 +1486,7 @@ class MachineDaemon:
                 pi_spec, which=_find_cli_in_common_locations
             )
 
-        spec = GENERIC_ACP_AGENTS.get(agent)
+        spec = effective_acp_agents().get(agent)
         if spec is not None:
             from integrations.headless.generic_acp import resolve_agent_binary
 
@@ -1482,7 +1507,7 @@ class MachineDaemon:
             return "Codex"
         if agent == "opencode":
             return "OpenCode"
-        spec = GENERIC_ACP_AGENTS.get(agent)
+        spec = effective_acp_agents().get(agent)
         if spec is not None:
             return spec.display_name
         pi_spec = PI_FAMILY_AGENTS.get(agent)
@@ -2032,6 +2057,32 @@ class MachineDaemon:
             return open_ops.open_path(**(frame.get("params") or {}))
         if method == "scan-agents":
             return self.scan_agents_rpc()
+        if method == "provider-list":
+            from vicoa.rpc import provider_ops
+
+            return provider_ops.provider_list()
+        if method == "provider-add":
+            from vicoa.rpc import provider_ops
+
+            return self._after_provider_change(
+                provider_ops.provider_add(**(frame.get("params") or {}))
+            )
+        if method == "provider-remove":
+            from vicoa.rpc import provider_ops
+
+            return self._after_provider_change(
+                provider_ops.provider_remove(**(frame.get("params") or {}))
+            )
+        if method == "provider-set-enabled":
+            from vicoa.rpc import provider_ops
+
+            return self._after_provider_change(
+                provider_ops.provider_set_enabled(**(frame.get("params") or {}))
+            )
+        if method == "provider-probe":
+            from vicoa.rpc import provider_ops
+
+            return provider_ops.provider_probe(**(frame.get("params") or {}))
         if method == "fetch-claude-usage":
             from vicoa.rpc import claude_usage
 
@@ -2077,6 +2128,11 @@ class MachineDaemon:
             "list-open-apps",
             "open-path",
             "scan-agents",
+            "provider-list",
+            "provider-add",
+            "provider-remove",
+            "provider-set-enabled",
+            "provider-probe",
             "fetch-claude-usage",
             *PTY_RPC_METHODS,
         ]
@@ -2100,6 +2156,19 @@ class MachineDaemon:
         agents = self._detect_available_agents()
         self.push_available_agents(agents)
         return {"available_agents": agents}
+
+    def _after_provider_change(self, result: dict[str, Any]) -> dict[str, Any]:
+        """Re-publish `available_agents` once the config file changed.
+
+        The new (or removed) provider is spawnable the moment the file is
+        written — `effective_acp_agents` is keyed on its mtime — but every
+        client's picker reads the cloud machine row, so push the fresh map
+        the same way the Rescan button does. Failed ops (`error` key) change
+        nothing and skip the push.
+        """
+        if "error" not in result:
+            result["available_agents"] = self.scan_agents_rpc()["available_agents"]
+        return result
 
     def push_available_agents(self, agents: dict[str, bool]) -> None:
         """Refresh `available_agents` in the cloud machine row.
@@ -2131,6 +2200,7 @@ class MachineDaemon:
                     "home_dir": str(Path.home()),
                     "metadata": {
                         "available_agents": agents,
+                        "agent_labels": self._agent_labels(),
                         "capabilities": self._capabilities(),
                     },
                 },
