@@ -16,6 +16,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { isTextSelectionClick } from '@/lib/text-selection';
 import { MessageMarkdown } from '@/components/ui/message-markdown';
 import { HighlightedText, useFindHighlight } from '@/components/dashboard/chat-find-context';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
@@ -375,12 +376,20 @@ export function ToolUseLine({
     <div className="using-tool-message">
       <button
         type="button"
-        onClick={expandable ? onToggle : undefined}
+        // A drag-select across the row must not also toggle it; `select-text`
+        // is what lets the drag select at all (lib/text-selection.ts).
+        onClick={
+          expandable
+            ? (e) => {
+                if (!isTextSelectionClick(e)) onToggle();
+              }
+            : undefined
+        }
         aria-expanded={expandable ? expanded : undefined}
         className={cn(
           // -mx cancels the hover padding so the text lines up with normal
           // markdown content (no visual indent).
-          'flex w-full min-w-0 items-center gap-1.5 rounded -mx-0.5 px-0.5 py-0.5 text-left',
+          'flex w-full min-w-0 items-center gap-1.5 rounded -mx-0.5 px-0.5 py-0.5 text-left select-text',
           expandable ? 'cursor-pointer hover:bg-muted/40' : 'cursor-default',
         )}
       >
@@ -509,9 +518,11 @@ export function ToolUseGroup({
     <div>
       <button
         type="button"
-        onClick={onToggle}
+        onClick={(e) => {
+          if (!isTextSelectionClick(e)) onToggle();
+        }}
         aria-expanded={expanded}
-        className="flex w-full min-w-0 items-center gap-1.5 rounded -mx-0.5 px-0.5 py-0.5 text-left cursor-pointer hover:bg-muted/40"
+        className="flex w-full min-w-0 items-center gap-1.5 rounded -mx-0.5 px-0.5 py-0.5 text-left cursor-pointer hover:bg-muted/40 select-text"
       >
         <ToolIcon name={groupIconName} />
         <ToolRunSummary

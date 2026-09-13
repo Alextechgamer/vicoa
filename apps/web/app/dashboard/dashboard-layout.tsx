@@ -822,6 +822,17 @@ function DashboardShell({
   setIsSpawnDialogOpen,
 }: DashboardShellProps) {
   const shellPathname = usePathname();
+  // Memoised: the session page reads this context, and a fresh object per
+  // layout render would re-render it (and its whole transcript) on every
+  // sidebar/WS-driven layout update.
+  const desktopChrome = useMemo(
+    () => ({
+      isDesktop: IS_DESKTOP,
+      sidebarCollapsed: isDesktopSidebarCollapsed,
+      expandSidebar: () => setIsDesktopSidebarCollapsed(false),
+    }),
+    [isDesktopSidebarCollapsed, setIsDesktopSidebarCollapsed],
+  );
   const isInstancePage = !!shellPathname?.match(/^\/dashboard\/agents\/[^\/]+$/);
   const isSettingsPage = !!shellPathname?.startsWith('/dashboard/settings');
   // App-shell pages whose own top header IS the window titlebar: it renders
@@ -953,13 +964,7 @@ function DashboardShell({
             <div style={DRAG_REGION} className="absolute inset-x-0 top-0 z-10 h-11" aria-hidden />
           )}
           {IS_DESKTOP && <DesktopNotificationNudge />}
-          <DesktopChromeProvider
-            value={{
-              isDesktop: IS_DESKTOP,
-              sidebarCollapsed: isDesktopSidebarCollapsed,
-              expandSidebar: () => setIsDesktopSidebarCollapsed(false),
-            }}
-          >
+          <DesktopChromeProvider value={desktopChrome}>
             <DashboardContent>
               {children}
             </DashboardContent>
