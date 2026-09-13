@@ -11,6 +11,7 @@ import { X, ArrowDown, Pin, Loader2, Menu, PanelLeft, Folder, FolderPlus, Messag
 import { useDesktopChrome } from '@/components/dashboard/desktop-chrome-context';
 import { DRAG_REGION, NO_DRAG } from '@/lib/app-region';
 import { attachSelectionDragFix } from '@/lib/selection-drag-fix';
+import { attachSelectionDragTrace, selectionTraceEnabled } from '@/lib/selection-drag-trace';
 import { DesktopTitlebarLead, DesktopWindowControlsSpacer, useDesktopWindows } from '@/components/desktop/window-chrome';
 import { getDesktopConfig } from '@/lib/runtime-config';
 import { trackFirstMessageSent } from '@/lib/desktop-telemetry';
@@ -708,8 +709,14 @@ function AgentInstanceContent() {
       element.addEventListener('pointerup', handleScrollerPointerUp, { passive: true });
       element.addEventListener('pointercancel', handleScrollerPointerUp, { passive: true });
       // Drag-selecting transcript text must work on every mousedown — see
-      // lib/selection-drag-fix.ts for the Chromium bug this papers over.
-      detachSelectionDragFixRef.current = attachSelectionDragFix(element);
+      // lib/selection-drag-fix.ts for the Blink quirks this papers over.
+      const detachFix = attachSelectionDragFix(element);
+      // Opt-in console trace for selection jumps that only reproduce live.
+      const detachTrace = selectionTraceEnabled() ? attachSelectionDragTrace(element) : null;
+      detachSelectionDragFixRef.current = () => {
+        detachFix();
+        detachTrace?.();
+      };
     }
   }, [
     handleScrollerScroll,
