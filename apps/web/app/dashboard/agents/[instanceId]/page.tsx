@@ -887,9 +887,11 @@ function AgentInstanceContent() {
     }
   }, [isSending, instanceId, postMessageToInstance, addOptimisticUserMessage, removeOptimisticMessage, followOwnSend]);
 
-  const handleOptionClick = (option: string) => {
+  // Memoised like the other MessageItem callbacks: a fresh function here
+  // defeated MessageItem's memo and re-rendered every row on every page render.
+  const handleOptionClick = useCallback((option: string) => {
     sendMessage(option);
-  };
+  }, [sendMessage]);
 
   const handleAskUserQuestionSubmit = useCallback((payload: AskUserQuestionSubmitPayload) => {
     console.debug('[AskUserQuestion] Submit payload', {
@@ -1358,6 +1360,13 @@ function AgentInstanceContent() {
   // Flatten groups + thinking indicator into a single list of items for Virtuoso.
   // `key` is stable per item (separator uses date, messages use id) so Virtuoso
   // can correctly preserve scroll position when older history is prepended.
+  // Header/footer are module-level components (see VIRTUOSO_COMPONENTS); what
+  // they show comes through Virtuoso's `context` prop instead of closures.
+  const virtuosoContext = useMemo<TranscriptListContext>(
+    () => ({ loadingOlder: hasOlderMessages || isLoadingOlder }),
+    [hasOlderMessages, isLoadingOlder],
+  );
+
   const chatItems = useMemo<ChatItem[]>(() => {
     const itemsAgentType = resolveAgentType(instance?.agent_type_name || undefined);
     const items: ChatItem[] = [];
@@ -1624,10 +1633,14 @@ function AgentInstanceContent() {
   // Open a file picked in the ⌘P finder: reveal the panel and hand it the path.
   // The bumped nonce makes the panel open it whether it was closed (opens on
   // mount) or already showing something else.
+  // Depend on the stable `setOpen`, not the `panel` object — usePanelState
+  // returns a fresh object every render, and this callback feeds the
+  // FileLinkProvider value that every message's link renderer subscribes to.
+  const { setOpen: setPanelOpen } = panel;
   const handleOpenSearchedFile = useCallback((path: string, line?: number) => {
-    panel.setOpen(true);
+    setPanelOpen(true);
     setOpenFileRequest((prev) => ({ path, line, nonce: (prev?.nonce ?? 0) + 1 }));
-  }, [panel]);
+  }, [setPanelOpen]);
 
   // Same, for a file path an agent cited as a link in its message. Only offered
   // once the session has a machine to read the file from — otherwise the links
@@ -2579,17 +2592,8 @@ function AgentInstanceContent() {
                 </div>
               );
             }}
-            components={{
-              Header: () =>
-                hasOlderMessages || isLoadingOlder ? (
-                  <div className="flex items-center justify-center py-3 text-muted-foreground">
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  </div>
-                ) : (
-                  <div className="h-6" />
-                ),
-              Footer: () => <div className="h-32" />,
-            }}
+            context={virtuosoContext}
+            components={VIRTUOSO_COMPONENTS}
           />
         )}
 
@@ -2832,6 +2836,26 @@ function AgentInstanceContent() {
     </div>
   );
 }
+
+/** What the transcript list's header needs to know; passed via Virtuoso `context`. */
+interface TranscriptListContext {
+  loadingOlder: boolean;
+}
+
+// Virtuoso treats each entry as a React component *type*, so these must be
+// module-level: an inline `{ Header: () => … }` object hands it a new type per
+// render and remounts the header/footer every time.
+const VIRTUOSO_COMPONENTS = {
+  Header: ({ context }: { context?: TranscriptListContext }) =>
+    context?.loadingOlder ? (
+      <div className="flex items-center justify-center py-3 text-muted-foreground">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+      </div>
+    ) : (
+      <div className="h-6" />
+    ),
+  Footer: () => <div className="h-32" />,
+};
 
 export default function AgentInstancePage() {
   return <AgentInstanceContent />;

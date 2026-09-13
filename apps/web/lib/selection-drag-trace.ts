@@ -45,7 +45,10 @@ export function attachSelectionDragTrace(container: HTMLElement): () => void {
   const observer = new MutationObserver((records) => {
     if (!dragging) return;
     for (const r of records) {
-      log(`MUTATION ${r.type} on ${describeNode(r.target, 0)} +${r.addedNodes.length} -${r.removedNodes.length}${r.attributeName ? ' attr=' + r.attributeName : ''}`);
+      const moved = r.addedNodes[0] ?? r.removedNodes[0] ?? null;
+      const parent = r.target instanceof Element ? r.target : null;
+      const chain = parent ? [parent, parent.parentElement, parent.parentElement?.parentElement].filter(Boolean).map((e) => describeNode(e as Element, 0)).join(' < ') : describeNode(r.target, 0);
+      log(`MUTATION ${r.type} on ${chain} +${r.addedNodes.length} -${r.removedNodes.length}${r.attributeName ? ' attr=' + r.attributeName : ''}${moved ? ' node=' + describeNode(moved, 0) : ''}`);
     }
   });
 
