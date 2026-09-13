@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button';
 import { X, ArrowDown, Pin, Loader2, Menu, PanelLeft, Folder, FolderPlus, MessageCircle, FileCode } from 'lucide-react';
 import { useDesktopChrome } from '@/components/dashboard/desktop-chrome-context';
 import { DRAG_REGION, NO_DRAG } from '@/lib/app-region';
+import { attachSelectionDragFix } from '@/lib/selection-drag-fix';
 import { DesktopTitlebarLead, DesktopWindowControlsSpacer, useDesktopWindows } from '@/components/desktop/window-chrome';
 import { getDesktopConfig } from '@/lib/runtime-config';
 import { trackFirstMessageSent } from '@/lib/desktop-telemetry';
@@ -312,6 +313,7 @@ function AgentInstanceContent() {
   // programmatic stick-to-bottom only ever *increases* scrollTop, so a decrease
   // paired with a real wheel/touch/scrollbar gesture is the user leaving.
   const scrollerElRef = useRef<HTMLElement | null>(null);
+  const detachSelectionDragFixRef = useRef<(() => void) | null>(null);
   const lastScrollTopRef = useRef(0);
   const userScrollUpIntentRef = useRef(false);
   const pointerScrollActiveRef = useRef(false);
@@ -681,6 +683,8 @@ function AgentInstanceContent() {
   const handleScrollerRef = useCallback((node: HTMLElement | Window | null) => {
     const previous = scrollerElRef.current;
     if (previous) {
+      detachSelectionDragFixRef.current?.();
+      detachSelectionDragFixRef.current = null;
       previous.removeEventListener('scroll', handleScrollerScroll);
       previous.removeEventListener('wheel', handleScrollerWheel);
       previous.removeEventListener('touchstart', handleScrollerTouchStart);
@@ -703,6 +707,9 @@ function AgentInstanceContent() {
       element.addEventListener('pointerdown', handleScrollerPointerDown, { passive: true });
       element.addEventListener('pointerup', handleScrollerPointerUp, { passive: true });
       element.addEventListener('pointercancel', handleScrollerPointerUp, { passive: true });
+      // Drag-selecting transcript text must work on every mousedown — see
+      // lib/selection-drag-fix.ts for the Chromium bug this papers over.
+      detachSelectionDragFixRef.current = attachSelectionDragFix(element);
     }
   }, [
     handleScrollerScroll,

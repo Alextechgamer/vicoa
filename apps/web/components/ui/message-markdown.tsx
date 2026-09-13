@@ -6,6 +6,7 @@ import 'highlight.js/styles/atom-one-dark.css';
 import { delimitBareUrls, diffLineBackgroundClass, formatDiffLines, formatTaskNotifications, normalizeCommandOutput } from '@/components/ui/message-markdown-utils';
 import { makeFindHighlightPlugin } from '@/lib/find-highlight';
 import { messageUrlTransform, parseMessageLink } from '@/lib/message-links';
+import { isTextSelectionClick } from '@/lib/text-selection';
 import { useFileLinks } from '@/components/dashboard/file-link-context';
 
 interface MessageMarkdownProps {
@@ -23,8 +24,12 @@ interface MessageMarkdownProps {
 const CHAT_CODE_FONT_FAMILY =
   'var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace';
 
-/** Shared by the two clickable link presentations (web URL, workspace file). */
-const LINK_CLASS = 'text-blue-600 hover:text-blue-800 underline text-sm';
+/**
+ * Shared by the two clickable link presentations (web URL, workspace file).
+ * `select-text` lets a drag that starts on the link select its text instead of
+ * being refused (see lib/text-selection.ts).
+ */
+const LINK_CLASS = 'text-blue-600 hover:text-blue-800 underline text-sm select-text';
 
 function MessageMarkdownImpl({ children, agentType, highlightQuery }: MessageMarkdownProps) {
   // Which workspace (if any) the file paths in this message refer to. Empty
@@ -394,8 +399,24 @@ function MessageMarkdownImpl({ children, agentType, highlightQuery }: MessageMar
           // Agents cite files as markdown links; only a real web URL may leave
           // the app. See lib/message-links.ts and vicoa-ai/vicoa#46.
           const link = parseMessageLink(href, fileLinks);
+          // Either link stays selectable text: `draggable={false}` stops a
+          // drag on a URL from becoming a link drag-and-drop, and a drag that
+          // ends on the link it started on must not also open it.
           if (link.kind === 'external') {
-            return <a href={link.href} className={LINK_CLASS} target="_blank" rel="noopener noreferrer">{children}</a>;
+            return (
+              <a
+                href={link.href}
+                className={LINK_CLASS}
+                target="_blank"
+                rel="noopener noreferrer"
+                draggable={false}
+                onClick={(e) => {
+                  if (isTextSelectionClick(e)) e.preventDefault();
+                }}
+              >
+                {children}
+              </a>
+            );
           }
           if (link.kind === 'file' && fileLinks.openFile) {
             const openFile = fileLinks.openFile;
@@ -403,7 +424,9 @@ function MessageMarkdownImpl({ children, agentType, highlightQuery }: MessageMar
             return (
               <button
                 type="button"
-                onClick={() => openFile(file)}
+                onClick={(e) => {
+                  if (!isTextSelectionClick(e)) openFile(file);
+                }}
                 title={file.line ? `Open ${file.path}:${file.line}` : `Open ${file.path}`}
                 className={`${LINK_CLASS} inline p-0 text-left align-baseline bg-transparent cursor-pointer`}
               >

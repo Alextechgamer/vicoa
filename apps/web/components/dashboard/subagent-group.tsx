@@ -3,6 +3,7 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import { Bot, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { isTextSelectionClick } from '@/lib/text-selection';
 import type { MessageResponse } from '@/lib/backend-api';
 import { ToolRunSummary, ToolUseLine, parseToolUse, type ToolUseAgentType } from '@/components/dashboard/tool-use-display';
 import { parseAskUserQuestionPayload } from '@/components/dashboard/ask-user-question-panel';
@@ -86,9 +87,11 @@ export function SubagentGroup({
     <div>
       <button
         type="button"
-        onClick={onToggle}
+        onClick={(e) => {
+          if (!isTextSelectionClick(e)) onToggle();
+        }}
         aria-expanded={expanded}
-        className="flex w-full min-w-0 items-center gap-1.5 rounded -mx-0.5 px-0.5 py-0.5 text-left cursor-pointer hover:bg-muted/40"
+        className="flex w-full min-w-0 items-center gap-1.5 rounded -mx-0.5 px-0.5 py-0.5 text-left cursor-pointer hover:bg-muted/40 select-text"
       >
         <Bot className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" aria-hidden="true" />
         <span className="min-w-0 shrink-0 text-muted-foreground">{headerLabel}</span>
