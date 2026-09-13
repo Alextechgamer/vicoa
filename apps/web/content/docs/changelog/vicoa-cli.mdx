@@ -5,6 +5,17 @@ description: Release notes for the Vicoa CLI and daemon — new agent support, b
 
 # Vicoa CLI
 
+### v1.9.0
+13 September, 2026
+- Add any ACP agent from a catalog of 33 — `vicoa provider catalog` lists them (Cline, Factory Droid, Qwen Code, Amp, goose, Junie, Kilo and more), `vicoa provider add <id>` makes one available on that machine with no daemon restart, and `vicoa provider check <id>` launches it and reports whether it actually works: its name and version, the models and modes it offers, or the stage it failed at and the last line it wrote to stderr
+- Add your own ACP agent, or a second profile of a built-in one with its own env and endpoint, under `agents.providers` in `~/.vicoa/config.json` — edits are picked up live, and a malformed entry is skipped and logged, never fatal
+- ACP sessions (Cursor, Gemini CLI, Copilot, Kimi and any catalog agent) now show what the agent is doing: tool calls appear the moment they start, the agent's plan renders as a checklist, token usage updates live, the agent's own slash commands reach the composer, and shell commands it runs belong to the session — bounded output, stoppable, gone when the session ends
+- Fix an unattended ACP permission prompt auto-approving after 15 minutes — it now waits a day, like Claude Code, and then declines
+- Fix resuming an ACP session appending a second copy of the transcript
+- Fix a dev server started by an ACP agent outliving the session
+- Fix "Delete worktree" failing with `not_a_repo` once the folder was already gone — removal now runs from the main checkout, a folder that is already gone counts as removed, and `vicoa.json` teardown finally runs on app-driven removals
+- Fix a just-created session showing up as a second copy of its project in the sidebar until the next reload
+
 ### v1.8.1
 12 September, 2026
 - Steer a queued message into the running turn — Claude Code, Codex, Pi and Oh My Pi pick it up at the agent's next safe boundary instead of after the turn ends; a message the agent can't take mid-turn goes back to the queue (#44)
