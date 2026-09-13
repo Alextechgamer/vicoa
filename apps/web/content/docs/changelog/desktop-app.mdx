@@ -5,6 +5,18 @@ description: Release notes for the Vicoa desktop app (macOS, Windows) — new fe
 
 # Desktop App
 
+### v0.1.26
+13 September, 2026
+- Bundle Vicoa CLI daemon [v1.9.0](/docs/changelog/vicoa-cli#v190)
+- Add an agent in one click — Settings → Providers now lists a catalog of 33 ACP agents (Cline, Factory Droid, Qwen Code, Amp, goose, Junie, Kilo and more) with their logos; Add puts one on the machine you pick, and Check launches it and tells you whether it works, which models it offers, or exactly why it failed
+- Agents added by hand in `~/.vicoa/config.json` appear in the agent picker too, with a readable label and icon
+- ACP agents (Cursor, Gemini CLI, Copilot, Kimi and the catalog ones) now show tool calls as they start, the agent's plan as a checklist, live token usage, and the agent's own slash commands in the composer
+- Select chat text reliably — drags no longer die about one time in fifteen on a Retina trackpad, a drag that leaves a table stays on the row you are level with, a selection no longer spreads backwards while the transcript updates, and tool rows, thinking cards and links are selectable too
+- Ctrl+Tab and the other Ctrl shortcuts no longer also type into the terminal — switching tabs used to send a Tab to the shell (and on Linux, Ctrl+W closed the tab and deleted a word)
+- Worktree groups in the sidebar follow the folder, so checking out a new branch inside a worktree no longer splits it into two groups; a worktree removed outside the app is shown struck through, and Delete worktree cleans it up instead of failing with `not_a_repo`
+- Fix a just-created session appearing as a second copy of its project in the sidebar until the next reload
+- Fix Settings → Providers making the page scroll sideways when one agent's description was long
+
 ### v0.1.25
 12 September, 2026
 - Bundle Vicoa CLI daemon [v1.8.1](/docs/changelog/vicoa-cli#v181)
