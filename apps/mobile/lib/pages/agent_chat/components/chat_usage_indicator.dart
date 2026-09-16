@@ -259,10 +259,15 @@ String? formatUsageReset(BuildContext context, DateTime? resetsAt,
 
 // --- ring painter --------------------------------------------------------
 
+/// Monochrome context ring. A null [pct] draws the track alone: the agent
+/// reported a token count but no window size, so there is nothing honest to
+/// fill — the empty ring still says "usage lives here" and opens the sheet
+/// with the count, where a bare "16k" in the icon slot read as a mystery
+/// number. Mirrors the web's `Ring`.
 class _UsageRingPainter extends CustomPainter {
   _UsageRingPainter(
       {required this.pct, required this.color, required this.trackColor});
-  final double pct;
+  final double? pct;
   final Color color;
   final Color trackColor;
 
@@ -277,7 +282,9 @@ class _UsageRingPainter extends CustomPainter {
       ..color = trackColor;
     canvas.drawCircle(center, radius, track);
 
-    final sweep = 2 * math.pi * (pct.clamp(0, 100) / 100);
+    final fill = pct;
+    if (fill == null) return;
+    final sweep = 2 * math.pi * (fill.clamp(0, 100) / 100);
     final progress = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = strokeWidth
@@ -426,24 +433,19 @@ class _ChatUsageIndicatorState extends State<ChatUsageIndicator> {
           alignment: Alignment.center,
           // Ring only in the composer — no percentage text; the breakdown
           // lives in the bottom sheet. A 40x40 box with the circular InkWell
-          // (radius 20) makes the tap highlight match the icon buttons.
-          child: triggerPct != null
-              ? SizedBox(
-                  width: 18.0,
-                  height: 18.0,
-                  child: CustomPaint(
-                    painter: _UsageRingPainter(
-                      pct: triggerPct,
-                      color: color,
-                      trackColor: theme.secondaryText.withValues(alpha: 0.2),
-                    ),
-                  ),
-                )
-              : (u.usedTokens != null
-                  ? Text(formatUsageTokens(u.usedTokens!),
-                      style: theme.bodyMedium.override(
-                          color: theme.secondaryText, fontSize: 12.0))
-                  : const SizedBox.shrink()),
+          // (radius 20) makes the tap highlight match the icon buttons. With
+          // no known window the ring is drawn empty (track only).
+          child: SizedBox(
+            width: 18.0,
+            height: 18.0,
+            child: CustomPaint(
+              painter: _UsageRingPainter(
+                pct: triggerPct,
+                color: color,
+                trackColor: theme.secondaryText.withValues(alpha: 0.2),
+              ),
+            ),
+          ),
         ),
       ),
     );

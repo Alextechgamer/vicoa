@@ -48,7 +48,10 @@ from integrations.headless.jsonl_stream import (
 from integrations.headless.session_lifecycle import (
     WRAPPER_STOP_STATUSES as _WRAPPER_STOP_STATUSES,
 )
-from integrations.headless.usage import UsageState
+from integrations.headless.usage import (
+    UsageState,
+    antigravity_context_window_for_model,
+)
 from protocol.system_prompt import format_prompt_prefix
 from vicoa.attachments import (
     AttachmentRef,
@@ -182,6 +185,8 @@ class AntigravitySession:
         self._models_task: Optional["asyncio.Task[None]"] = None
         self.available_models: List[Dict[str, str]] = []
         self.current_model: Optional[str] = None
+        #: agy's configured default model (``-p /model``), learned at bring-up.
+        self._configured_default_model: Optional[str] = None
 
     # ------------------------------------------------------------------
     # Bring-up
@@ -335,6 +340,7 @@ class AntigravitySession:
             ):
                 self.conversation_id = self._mapper.conversation_id
                 await self._persist_conversation_id()
+            self._apply_context_window()
         for emission in emissions:
             await self._post(emission.content, emission.metadata)
         if self._mapper.context_used_tokens is not None:
@@ -510,6 +516,8 @@ class AntigravitySession:
         await self._patch_session_config(
             {"agent": spec.CATALOG_ID, "model": self.model, "current_model": self.model}
         )
+        if self._apply_context_window():
+            await self._flush_usage()
         return True
 
     async def set_permission_mode(self, mode: str) -> bool:
@@ -593,22 +601,19 @@ class AntigravitySession:
         except Exception:
             logger.debug("antigravity: model discovery failed", exc_info=True)
             models = []
-        current: Optional[str] = None
-        requested = (self.model or "").strip()
-        if requested and requested not in spec.DEFAULT_MODEL_SENTINELS:
-            current = requested
-        else:
-            try:
-                configured = await asyncio.to_thread(
-                    spec.fetch_current_model, self.binary
-                )
-            except Exception:
-                logger.debug("antigravity: current-model lookup failed", exc_info=True)
-                configured = None
-            if configured:
-                current = configured["id"]
-                if models and all(m["id"] != current for m in models):
-                    models.append(configured)
+        # agy's own configured default is always fetched (cheap, quota-free):
+        # it is what runs when the picker is on "Default" — including after a
+        # mid-session switch back to it — and the context-window seed needs it.
+        try:
+            configured = await asyncio.to_thread(spec.fetch_current_model, self.binary)
+        except Exception:
+            logger.debug("antigravity: current-model lookup failed", exc_info=True)
+            configured = None
+        if configured:
+            self._configured_default_model = configured["id"]
+            if models and all(m["id"] != configured["id"] for m in models):
+                models.append(configured)
+        current = self._effective_model()
         delta: Dict[str, Any] = {}
         if models:
             self.available_models = models
@@ -618,6 +623,31 @@ class AntigravitySession:
             delta["current_model"] = current
         if delta:
             await self._patch_session_config(delta)
+        if self._apply_context_window():
+            await self._flush_usage()
+
+    def _effective_model(self) -> Optional[str]:
+        """The model the next request runs on: the explicit pick, else agy's configured default.
+
+        ``init.model`` is deliberately not consulted: it is only present when
+        ``--model`` was passed, so after a switch back to "Default" it would
+        keep naming the model the *previous* process was launched with.
+        """
+        requested = (self.model or "").strip()
+        if requested and requested not in spec.DEFAULT_MODEL_SENTINELS:
+            return requested
+        return self._configured_default_model
+
+    def _apply_context_window(self) -> bool:
+        """Seed the context-window size from the static per-model table.
+
+        agy never reports a window on the wire, so this is the only source;
+        the composer ring needs a max to draw a percentage at all. Returns
+        True when the size changed (the caller decides whether to flush).
+        """
+        return self._usage.set_context_max(
+            antigravity_context_window_for_model(self._effective_model())
+        )
 
     # ------------------------------------------------------------------
     # Watchdog and pushes

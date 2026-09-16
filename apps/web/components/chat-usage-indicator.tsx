@@ -37,10 +37,15 @@ const FETCH_INTERVAL_MS = 30_000;
 // The indicator is intentionally monochrome: the ring and every meter use one
 // neutral tone regardless of fill, so a high context/limit reading never turns
 // the composer amber or red.
-function Ring({ pct, size = 14 }: { pct: number; size?: number }) {
+//
+// `pct === null` draws the track alone: the agent reported a token count but
+// no window size, so there is nothing honest to fill. An empty ring still
+// reads as "usage lives here" and opens the popover with the count; a bare
+// "16k" in the icon slot read as a mystery number.
+function Ring({ pct, size = 14 }: { pct: number | null; size?: number }) {
   const r = size / 2 - 1.5;
   const c = 2 * Math.PI * r;
-  const clamped = Math.max(0, Math.min(100, pct));
+  const clamped = pct === null ? null : Math.max(0, Math.min(100, pct));
   return (
     <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="shrink-0">
       <circle
@@ -51,18 +56,20 @@ function Ring({ pct, size = 14 }: { pct: number; size?: number }) {
         strokeWidth={1.5}
         className="stroke-foreground/15"
       />
-      <circle
-        cx={size / 2}
-        cy={size / 2}
-        r={r}
-        fill="none"
-        strokeWidth={1.5}
-        strokeLinecap="round"
-        className="stroke-muted-foreground"
-        strokeDasharray={c}
-        strokeDashoffset={c * (1 - clamped / 100)}
-        transform={`rotate(-90 ${size / 2} ${size / 2})`}
-      />
+      {clamped !== null && (
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={r}
+          fill="none"
+          strokeWidth={1.5}
+          strokeLinecap="round"
+          className="stroke-muted-foreground"
+          strokeDasharray={c}
+          strokeDashoffset={c * (1 - clamped / 100)}
+          transform={`rotate(-90 ${size / 2} ${size / 2})`}
+        />
+      )}
     </svg>
   );
 }
@@ -149,7 +156,8 @@ export function ChatUsageIndicator({
 
   if (!view.hasAnything) return null;
 
-  // What the collapsed chip shows: prefer the context ring, else the tightest limit.
+  // What the collapsed chip shows: prefer the context ring, else the tightest
+  // limit, else (a token count with no known window) the empty track.
   const triggerPct = view.contextPct ?? view.tightest;
 
   return (
@@ -162,11 +170,7 @@ export function ChatUsageIndicator({
           // the neighbouring interrupt / send icon buttons.
           className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted-foreground/10 hover:text-foreground"
         >
-          {triggerPct !== null ? (
-            <Ring pct={triggerPct} size={18} />
-          ) : view.context ? (
-            <span className="text-xs">{formatTokens(view.context.used_tokens)}</span>
-          ) : null}
+          <Ring pct={triggerPct} size={18} />
         </button>
       </PopoverTrigger>
       <PopoverContent

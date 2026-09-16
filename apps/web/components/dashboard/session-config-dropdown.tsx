@@ -176,6 +176,17 @@ export function modelListWidthClass(
     : 'w-56';
 }
 
+/**
+ * Width for a permission-mode list.
+ *
+ * `TickItem` never truncates its label (the mode name is what you scan for),
+ * so a fixed `w-52` overflowed the moment a label grew past ~24 characters —
+ * Antigravity's "Read only (auto-deny writes & commands)" is the case that
+ * hit it. Sized to content with the old width as the floor, so the short
+ * Claude/Codex lists look exactly as before.
+ */
+export const PERMISSION_LIST_WIDTH_CLASS = 'w-auto min-w-52 max-w-[26rem]';
+
 /** One chip + its dropdown list. */
 export function ChipDropdown({
   chip,
@@ -333,7 +344,7 @@ export function SessionConfigChips({
         <ChipDropdown
           title="Mode"
           disabled={disabled}
-          contentClassName="w-52"
+          contentClassName={PERMISSION_LIST_WIDTH_CLASS}
           chip={
             <>
               {pendingPermissionMode ? (

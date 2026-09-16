@@ -172,6 +172,36 @@ async def test_turn_posts_text_status_and_usage(fake_binary, tmp_path):
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX shell shim + SIGINT")
+async def test_context_window_is_seeded_per_model(fake_binary, tmp_path, monkeypatch):
+    """agy never reports a window; the static table supplies one per model
+    so the composer can draw a percentage, and a switch to an unknown model
+    drops it again rather than keeping a stale max."""
+    monkeypatch.setattr(
+        spec,
+        "fetch_models",
+        lambda binary, **kw: [
+            {"id": "gemini-3.8-flash-low", "label": "Gemini 3.8 Flash (Low)"},
+            {"id": "mystery-model", "label": "Mystery"},
+        ],
+    )
+    client = RecordingClient()
+    session = _session(client, fake_binary, tmp_path, model="gemini-3.8-flash-low")
+    try:
+        await session.start()
+        await session.deliver_user_message("hello")
+        context = client.metadata("usage")[-1]["context"]
+        assert context["max_tokens"] == 1_048_576
+        assert context["used_tokens"] == 125
+
+        assert await session.set_model("mystery-model") is True
+        context = client.metadata("usage")[-1]["context"]
+        assert context["max_tokens"] is None
+        assert context["used_tokens"] == 125
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX shell shim + SIGINT")
 async def test_denied_turn_posts_one_notice(fake_binary, tmp_path):
     client = RecordingClient()
     session = _session(client, fake_binary, tmp_path)

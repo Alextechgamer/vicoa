@@ -16,6 +16,7 @@ import { AgentTypeIcon } from '@/components/dashboard/agent-type-icon';
 import {
   ChipDropdown,
   ModeIcon,
+  PERMISSION_LIST_WIDTH_CLASS,
   TickItem,
   modelListWidthClass,
   modelSublabel,
@@ -207,7 +208,7 @@ export function SessionConfigEditor({
           title="Permission mode"
           disabled={disabled}
           side={side}
-          contentClassName="w-52"
+          contentClassName={PERMISSION_LIST_WIDTH_CLASS}
           chip={
             <>
               <ModeIcon value={value.permission_mode ?? 'default'} className="h-3.5 w-3.5 flex-shrink-0" />
