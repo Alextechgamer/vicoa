@@ -5,6 +5,19 @@ description: Release notes for the Vicoa desktop app (macOS, Windows) — new fe
 
 # Desktop App
 
+### v0.1.27
+16 September, 2026
+- Bundle Vicoa CLI daemon [v1.9.1](/docs/changelog/vicoa-cli#v191)
+- Antigravity joins the agent picker — Google's Antigravity CLI (agy 1.1.15 or newer) with its live model list and three permission modes (read only, accept edits, bypass), switchable from the gear mid-session
+- See your Codex and GitHub Copilot usage in the composer, the same meter Claude sessions already had; catalog-added agents now get a real model and permission-mode picker on the new-session page, probed once per machine
+- Branch icons in the sidebar are coloured by pull-request state — green open, purple merged, red closed, grey draft or none — and hovering one shows the title, check status and buttons to open or copy the PR link
+- Name a new worktree from the picker — the name becomes the branch and the folder, is checked as you type, and a taken name suggests the first free suffix instead of silently picking another
+- Open a file with the OS default app or reveal it in Finder / File Explorer / File Manager straight from the "No preview available" card and the Open in ▾ menu — and spreadsheets, Word and PowerPoint documents, PDFs, archives, audio, video and fonts now get their own icons in the file tree, tabs and search palette
+- Start a session from a task's detail page — the same flow as the board's context menu, including the sub-task picker
+- The Changes tab's Refresh button now refreshes the history pane too, and Files and Changes refresh on their own when the session's agent finishes a turn
+- A machine that goes offline with editor tabs open no longer keeps firing failed file checks — the check backs off until the machine is back
+- Fix a session failing to start with "Headless Claude encountered a fatal error" when the server is slow, and a failed start now says why instead of opening an empty session
+
 ### v0.1.26
 13 September, 2026
 - Bundle Vicoa CLI daemon [v1.9.0](/docs/changelog/vicoa-cli#v190)
