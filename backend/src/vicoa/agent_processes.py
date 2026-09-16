@@ -76,6 +76,8 @@ def _classify(command: str) -> tuple[Optional[str], Optional[str]]:
     if "integrations.headless.pi_native" in command:
         # One module serves pi + omp; the agent id rides in the --agent flag.
         return (_extract_flag(command, "--agent") or "pi", "headless")
+    if "integrations.headless.antigravity" in command:
+        return ("antigravity", "headless")
     if "integrations.headless.claude_code" in command:
         return ("claude", "headless")
 
@@ -144,6 +146,7 @@ _AGENT_NAMES = frozenset(
         "copilot",
         "kimi",
         "hermes",
+        "antigravity",
     }
 )
 

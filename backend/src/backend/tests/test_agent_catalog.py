@@ -29,6 +29,7 @@ class TestAgentCatalogShape:
             "hermes",
             "omp",
             "pi",
+            "antigravity",
         }
 
     def test_claude_default_model_is_sonnet(self):

@@ -442,3 +442,45 @@ def test_project_none_for_empty_or_garbage_usage():
     assert project_rate_limited_until({}) is None
     assert project_rate_limited_until({"limits": {"windows": []}}) is None
     assert project_rate_limited_until({"limits": "nope"}) is None
+
+
+# ---------------------------------------------------------------------------
+# Antigravity: static per-model window + an overwritable max
+# ---------------------------------------------------------------------------
+
+
+def test_antigravity_context_window_for_model():
+    from integrations.headless.usage import antigravity_context_window_for_model as win
+
+    # Effort suffixes say nothing about the window.
+    assert win("gemini-3.8-flash-high") == 1_048_576
+    assert win("gemini-3.8-flash-low") == 1_048_576
+    assert win("gemini-3.1-pro-high") == 1_048_576
+    assert win("gpt-oss-120b-medium") == 131_072
+    # Claude ids defer to the Claude table.
+    assert win("claude-sonnet-4-6") == 200_000
+    assert win("claude-opus-4-6-thinking") == 200_000
+    # Unknown or absent -> None, never a guess.
+    assert win("some-future-model") is None
+    assert win("") is None
+    assert win(None) is None
+
+
+def test_set_context_max_overwrites_and_clears():
+    state = UsageState()
+    state.set_context_usage(1_000)
+    assert state.set_context_max(200_000) is True
+    assert state.context == {
+        "used_tokens": 1_000,
+        "max_tokens": 200_000,
+        "cost_usd": None,
+    }
+    # Same value: no change.
+    assert state.set_context_max(200_000) is False
+    # A different model's window replaces it (latch would have kept the first).
+    assert state.set_context_max(1_048_576) is True
+    assert state.context is not None and state.context["max_tokens"] == 1_048_576
+    # Unknown model: the max is dropped, the fill stays.
+    assert state.set_context_max(None) is True
+    assert state.context == {"used_tokens": 1_000, "max_tokens": None, "cost_usd": None}
+    assert state.set_context_max(0) is False

@@ -388,7 +388,8 @@ export function toSpawnMetadata(config: SessionConfig, prompt?: string): Record<
     }
   } else {
     // Generic ACP agents (cursor/gemini/copilot/kimi/hermes and any
-    // catalog-added or synthesized one): model + permission_mode pass through;
+    // catalog-added or synthesized one) and Antigravity: model +
+    // permission_mode pass through;
     // the wrapper applies them best-effort against the agent's live ACP
     // session state. `default`/`auto` is the "keep the agent's own model"
     // sentinel and is not sent (the wrapper would skip it anyway).
@@ -529,7 +530,7 @@ export function savePersistedSelection(payload: Partial<PersistedSelection>): vo
 // ---------------------------------------------------------------------------
 
 export const AGENT_CATALOG_FALLBACK: AgentCatalog = {
-  version: "2026-09-11-1",
+  version: "2026-09-16-1",
   min_cli_version: "1.20.0",
   min_client_version: "0.42.0",
   agents: [
@@ -671,6 +672,41 @@ export const AGENT_CATALOG_FALLBACK: AgentCatalog = {
         { id: "off", label: "Off" },
       ],
       // Pi has no approval-mode flag at all, so no mode picker.
+    },
+    // Antigravity CLI (integrations/headless/antigravity/) — Google's `agy`,
+    // driven over its stream-json stdio; neither ACP nor an SDK. Models are the
+    // 2026-09-16 `agy models` list; every id already encodes its effort and
+    // `--effort` hard-fails on a mismatch, so there is no thinking picker. The
+    // wrapper PATCHes the live list into available_models at session start.
+    // Headless agy cannot prompt: `default` auto-denies writes and commands,
+    // `acceptEdits` allows workspace writes, `bypassPermissions` allows all.
+    // No `supports_steer` — the CLI must not be written to mid-turn.
+    {
+      id: "antigravity",
+      label: "Antigravity",
+      models: [
+        { id: "default", label: "Default", is_default: true },
+        { id: "gemini-3.8-flash-high", label: "Gemini 3.8 Flash (High)" },
+        { id: "gemini-3.8-flash-medium", label: "Gemini 3.8 Flash (Medium)" },
+        { id: "gemini-3.8-flash-low", label: "Gemini 3.8 Flash (Low)" },
+        { id: "gemini-3.7-flash-high", label: "Gemini 3.7 Flash (High)" },
+        { id: "gemini-3.7-flash-medium", label: "Gemini 3.7 Flash (Medium)" },
+        { id: "gemini-3.7-flash-low", label: "Gemini 3.7 Flash (Low)" },
+        { id: "gemini-3.6-flash-high", label: "Gemini 3.6 Flash (High)" },
+        { id: "gemini-3.6-flash-medium", label: "Gemini 3.6 Flash (Medium)" },
+        { id: "gemini-3.6-flash-low", label: "Gemini 3.6 Flash (Low)" },
+        { id: "gemini-3.1-pro-high", label: "Gemini 3.1 Pro (High)" },
+        { id: "gemini-3.1-pro-low", label: "Gemini 3.1 Pro (Low)" },
+        { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6 (Thinking)" },
+        { id: "claude-opus-4-6-thinking", label: "Claude Opus 4.6 (Thinking)" },
+        { id: "gpt-oss-120b-medium", label: "GPT-OSS 120B (Medium)" },
+      ],
+      permission_modes: [
+        { id: "default", label: "Read only (auto-deny writes & commands)", is_default: true },
+        { id: "acceptEdits", label: "Write approval (auto-deny commands)" },
+        { id: "plan", label: "Plan" },
+        { id: "bypassPermissions", label: "Skip permissions (Yolo)" },
+      ],
     },
     {
       id: "cursor",

@@ -196,8 +196,8 @@ class SessionConfig {
       if (model != null && model != 'default' && model != 'auto') m['model'] = model;
     } else {
       // Generic ACP agents (cursor/gemini/copilot/kimi/hermes and any
-      // catalog-added or synthesized one): model + permission_mode pass
-      // through; the wrapper applies them best-effort against the agent's live
+      // catalog-added or synthesized one) and Antigravity: model +
+      // permission_mode pass through; the wrapper applies them best-effort against the agent's live
       // ACP session state. `default`/`auto` is the "keep the agent's own
       // model" sentinel and is not sent (the wrapper would skip it anyway).
       if (model != null && model != 'default' && model != 'auto') m['model'] = model;
@@ -441,7 +441,7 @@ String sessionConfigSummary(AgentCatalog catalog, SessionConfig config) {
 /// the flag today; this comment is the rule.
 const String _agentCatalogFallbackJson = r'''
 {
-  "version": "2026-09-05-1",
+  "version": "2026-09-16-1",
   "min_cli_version": "1.20.0",
   "min_client_version": "0.42.0",
   "agents": [
@@ -543,6 +543,33 @@ const String _agentCatalogFallbackJson = r'''
         {"id": "medium", "label": "Medium", "is_default": true},
         {"id": "low", "label": "Low"},
         {"id": "off", "label": "Off"}
+      ]
+    },
+    {
+      "id": "antigravity",
+      "label": "Antigravity",
+      "models": [
+        {"id": "default", "label": "Default", "is_default": true},
+        {"id": "gemini-3.8-flash-high", "label": "Gemini 3.8 Flash (High)"},
+        {"id": "gemini-3.8-flash-medium", "label": "Gemini 3.8 Flash (Medium)"},
+        {"id": "gemini-3.8-flash-low", "label": "Gemini 3.8 Flash (Low)"},
+        {"id": "gemini-3.7-flash-high", "label": "Gemini 3.7 Flash (High)"},
+        {"id": "gemini-3.7-flash-medium", "label": "Gemini 3.7 Flash (Medium)"},
+        {"id": "gemini-3.7-flash-low", "label": "Gemini 3.7 Flash (Low)"},
+        {"id": "gemini-3.6-flash-high", "label": "Gemini 3.6 Flash (High)"},
+        {"id": "gemini-3.6-flash-medium", "label": "Gemini 3.6 Flash (Medium)"},
+        {"id": "gemini-3.6-flash-low", "label": "Gemini 3.6 Flash (Low)"},
+        {"id": "gemini-3.1-pro-high", "label": "Gemini 3.1 Pro (High)"},
+        {"id": "gemini-3.1-pro-low", "label": "Gemini 3.1 Pro (Low)"},
+        {"id": "claude-sonnet-4-6", "label": "Claude Sonnet 4.6 (Thinking)"},
+        {"id": "claude-opus-4-6-thinking", "label": "Claude Opus 4.6 (Thinking)"},
+        {"id": "gpt-oss-120b-medium", "label": "GPT-OSS 120B (Medium)"}
+      ],
+      "permission_modes": [
+        {"id": "default", "label": "Read only (auto-deny writes & commands)", "is_default": true},
+        {"id": "acceptEdits", "label": "Write approval (auto-deny commands)"},
+        {"id": "plan", "label": "Plan"},
+        {"id": "bypassPermissions", "label": "Skip permissions (Yolo)"}
       ]
     },
     {

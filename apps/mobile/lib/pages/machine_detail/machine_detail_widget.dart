@@ -23,6 +23,7 @@ const List<List<String>> _kAgents = [
   ['copilot', 'Copilot'],
   ['kimi', 'Kimi'],
   ['hermes', 'Hermes'],
+  ['antigravity', 'Antigravity'],
 ];
 
 /// Detail view for one machine: status, agent availability, and system info

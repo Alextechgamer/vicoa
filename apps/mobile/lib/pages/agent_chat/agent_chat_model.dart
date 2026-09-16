@@ -499,6 +499,7 @@ String? latestWebPreviewUrl;
     'copilot',
     'kimi',
     'hermes',
+    'antigravity',
     'omp',
     'pi',
   ];

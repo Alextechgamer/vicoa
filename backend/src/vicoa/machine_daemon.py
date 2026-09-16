@@ -38,6 +38,7 @@ from protocol.agent_catalog import (
 )
 from integrations.headless.generic_acp import effective_acp_agents
 from integrations.headless.pi_family.spec import PI_FAMILY_AGENTS
+from integrations.headless.antigravity import spec as antigravity_spec
 from vicoa.utils import derive_ws_url, get_project_path
 from vicoa.machine_identity import (
     IdentityAction,
@@ -730,6 +731,7 @@ class MachineDaemon:
             "opencode",
             *effective_acp_agents(),
             *PI_FAMILY_AGENTS,
+            antigravity_spec.CATALOG_ID,
         )
 
     def _agent_labels(self) -> dict[str, str]:
@@ -1079,6 +1081,9 @@ class MachineDaemon:
         # this is read back from the agent at first launch and stored on the
         # instance — never minted by Vicoa.
         **{agent_id: "--pi-session-id" for agent_id in PI_FAMILY_AGENTS},
+        # agy issues the id at first launch (``init.conversation_id``); the
+        # wrapper persists it and a relaunch passes ``--conversation``.
+        antigravity_spec.CATALOG_ID: "--conversation-id",
     }
 
     def _session_process_is_running(self, instance_id: str) -> bool:
@@ -1235,6 +1240,18 @@ class MachineDaemon:
                 prompt = self._extract_prompt(metadata)
                 if prompt:
                     cmd.extend(["--prompt", prompt])
+            elif normalized_agent == antigravity_spec.CATALOG_ID:
+                model = self._extract_generic_model(metadata)
+                if model:
+                    cmd.extend(["--model", model])
+                permission_mode = self._extract_permission_mode(
+                    metadata, agent=normalized_agent
+                )
+                if permission_mode:
+                    cmd.extend(["--permission-mode", permission_mode])
+                prompt = self._extract_prompt(metadata)
+                if prompt:
+                    cmd.extend(["--prompt", prompt])
             elif normalized_agent in effective_acp_agents():
                 model = self._extract_generic_model(metadata)
                 if model:
@@ -1375,6 +1392,35 @@ class MachineDaemon:
                 cmd.extend(["--prompt", prompt])
             return cmd
 
+        if normalized_agent == antigravity_spec.CATALOG_ID:
+            cmd = [
+                sys.executable,
+                "-m",
+                "integrations.headless.antigravity",
+                "--api-key",
+                self.api_key,
+                "--base-url",
+                self.base_url,
+                "--project-path",
+                directory,
+                "--name",
+                antigravity_spec.DISPLAY_NAME,
+            ]
+            if session_id:
+                cmd.extend(["--session-id", session_id])
+            model = self._extract_generic_model(metadata)
+            if model:
+                cmd.extend(["--model", model])
+            permission_mode = self._extract_permission_mode(
+                metadata, agent=normalized_agent
+            )
+            if permission_mode:
+                cmd.extend(["--permission-mode", permission_mode])
+            prompt = self._extract_prompt(metadata)
+            if prompt:
+                cmd.extend(["--prompt", prompt])
+            return cmd
+
         if normalized_agent in effective_acp_agents():
             spec = effective_acp_agents()[normalized_agent]
             cmd = [
@@ -1461,9 +1507,12 @@ class MachineDaemon:
             "opencode": "opencode",
             **{agent_id: agent_id for agent_id in effective_acp_agents()},
             **{agent_id: agent_id for agent_id in PI_FAMILY_AGENTS},
+            antigravity_spec.CATALOG_ID: antigravity_spec.CATALOG_ID,
             # Display-name spellings clients may send instead of the id.
             "oh my pi": "omp",
             "oh-my-pi": "omp",
+            "agy": antigravity_spec.CATALOG_ID,
+            "antigravity cli": antigravity_spec.CATALOG_ID,
         }
 
         resolved = alias_map.get(normalized)
@@ -1475,6 +1524,7 @@ class MachineDaemon:
                     "opencode",
                     *effective_acp_agents(),
                     *PI_FAMILY_AGENTS,
+                    antigravity_spec.CATALOG_ID,
                 ]
             )
             raise ValueError(f"agent must be one of: {known}")
@@ -1523,6 +1573,13 @@ class MachineDaemon:
                 pi_spec, which=_find_cli_in_common_locations
             )
 
+        if agent == antigravity_spec.CATALOG_ID:
+            # ~/.local/bin is on find_npm_cli's list already; the version gate
+            # is the real check — driver mode only exists from 1.1.15.
+            return antigravity_spec.check_runtime_requirements(
+                which=_find_cli_in_common_locations
+            )
+
         spec = effective_acp_agents().get(agent)
         if spec is not None:
             from integrations.headless.generic_acp import resolve_agent_binary
@@ -1550,6 +1607,8 @@ class MachineDaemon:
         pi_spec = PI_FAMILY_AGENTS.get(agent)
         if pi_spec is not None:
             return pi_spec.display_name
+        if agent == antigravity_spec.CATALOG_ID:
+            return antigravity_spec.DISPLAY_NAME
         return "Claude Code"
 
     def _extract_tool_list(

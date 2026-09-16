@@ -1,9 +1,9 @@
 ---
-title: Gemini, Cursor, Copilot, Kimi, Hermes, Pi, Oh My Pi
-description: Use Gemini, Cursor, Copilot, Kimi, Hermes, Pi, and Oh My Pi in Vicoa by starting a new session directly from the web dashboard or mobile app.
+title: Gemini, Cursor, Copilot, Kimi, Hermes, Pi, Oh My Pi, Antigravity
+description: Use Gemini, Cursor, Copilot, Kimi, Hermes, Pi, Oh My Pi, and Antigravity in Vicoa by starting a new session directly from the web dashboard or mobile app.
 ---
 
-# Gemini, Cursor, Copilot, Kimi, Hermes, Pi, Oh My Pi
+# Gemini, Cursor, Copilot, Kimi, Hermes, Pi, Oh My Pi, Antigravity
 
 Beyond Claude Code, Codex, and OpenCode, Vicoa now supports more coding agents that you launch directly from a **new session** — no extra `vicoa <agent>` command needed:
 
@@ -14,12 +14,13 @@ Beyond Claude Code, Codex, and OpenCode, Vicoa now supports more coding agents t
 - **Hermes** — Nous Research's Hermes
 - **Pi** — Pi coding agent
 - **Oh My Pi** — `omp`, a fork of Pi
+- **Antigravity** — Google's Antigravity CLI, `agy`
 
-Gemini, Cursor, Copilot, Kimi, and Hermes are integrated through the Agent Client Protocol (ACP). Pi and Oh My Pi are native integrations, like Claude Code and Codex. Either way they run on your own machine using your own credentials — Vicoa never stores your provider keys.
+Gemini, Cursor, Copilot, Kimi, and Hermes are integrated through the Agent Client Protocol (ACP). Pi, Oh My Pi, and Antigravity are native integrations, like Claude Code and Codex. Either way they run on your own machine using your own credentials — Vicoa never stores your provider keys.
 
 ## 1. Update Vicoa to the latest version
 
-Support for these agents requires **Vicoa CLI v1.6.1 or later** and the **mobile app v1.6.8 or later**. Pi and Oh My Pi are newer: they need **Vicoa CLI v1.7.18 or later**, which the **desktop app v0.1.22 or later** bundles. Upgrade the CLI with:
+Support for these agents requires **Vicoa CLI v1.6.1 or later** and the **mobile app v1.6.8 or later**. Pi and Oh My Pi are newer: they need **Vicoa CLI v1.7.18 or later**, which the **desktop app v0.1.22 or later** bundles. Antigravity is the newest and needs the Vicoa CLI release that introduced it (after v1.9.0) together with **Antigravity CLI 1.1.15 or later**. Upgrade the CLI with:
 
 ```bash
 npm i -g @vicoa/cli@latest
@@ -50,6 +51,7 @@ Each agent runs from its own CLI on the machine. Install the agent's CLI there a
 | Hermes | [Hermes Agent](https://hermes-agent.nousresearch.com/) |
 | Pi | [Pi](https://github.com/earendil-works/pi) — `npm install -g @earendil-works/pi-coding-agent` |
 | Oh My Pi | [Oh My Pi](https://github.com/can1357/oh-my-pi) — `brew install can1357/tap/omp` (it runs on Bun ≥ 1.3.14) |
+| Antigravity | [Antigravity CLI](https://antigravity.google/docs/cli/install) — `curl -fsSL https://antigravity.google/cli/install.sh \| bash`, then run `agy` once and sign in with Google |
 
 Start the Vicoa daemon on the machine:
 
@@ -104,3 +106,5 @@ You can also change your model from under the same coding agent during a session
 - **Shows "Not Installed" for an agent you've installed?** Vicoa detects installed agents when the daemon starts. If you installed the agent's CLI after starting Vicoa, run `vicoa daemon` again so it picks up the newly installed agent.
 - **New agents don't appear?** They only show when both the CLI (≥ v1.6.1) and the app (≥ v1.6.8) are up to date — Pi and Oh My Pi need CLI ≥ v1.7.18. See [Version Compatibility](/docs/version-compatibility).
 - **Oh My Pi refuses to start?** It runs on Bun, so the daemon checks for Bun ≥ 1.3.14 on your PATH before spawning it. Install Bun from [bun.sh](https://bun.sh), or use the Homebrew build, which bundles its own.
+- **Antigravity denied an action and stopped?** Vicoa drives `agy` in its headless mode, which cannot ask for approval — an action outside the permission mode you picked is refused and the turn ends with a notice saying so. The **default** mode only auto-allows reading files in the project; **Write approval** also allows writing them; **Skip permissions** allows everything, including shell commands. To allow specific commands without skipping everything, add rules under `permissions.allow` in `~/.gemini/antigravity-cli/settings.json` (for example `command(git)`), then start a new turn. Model and permission mode can be changed mid-session from the gear; the change applies from the next message.
+- **Antigravity says it is too old?** Vicoa needs `agy` 1.1.15 or later (the release that added the stream-json driver mode). Run `agy update`.

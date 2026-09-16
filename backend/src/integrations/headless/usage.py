@@ -251,6 +251,38 @@ def claude_context_window_for_model(model: Optional[str]) -> Optional[int]:
     return _CLAUDE_DEFAULT_CONTEXT_WINDOW if "claude" in needle else None
 
 
+#: Context windows for the models ``agy models`` lists (2026-09-16). Keys are
+#: id prefixes: the Gemini and GPT-OSS ids carry an effort suffix
+#: (``gemini-3.8-flash-high``), which says nothing about the window. Claude ids
+#: defer to the Claude table so the two never disagree.
+_ANTIGRAVITY_CONTEXT_WINDOWS: Dict[str, int] = {
+    "gemini-3.8-flash": 1_048_576,
+    "gemini-3.7-flash": 1_048_576,
+    "gemini-3.6-flash": 1_048_576,
+    "gemini-3.1-pro": 1_048_576,
+    "gpt-oss-120b": 131_072,
+}
+
+
+def antigravity_context_window_for_model(model: Optional[str]) -> Optional[int]:
+    """Best-effort static window size for an ``agy`` model id.
+
+    Antigravity reports token counts per step but never a window size, so
+    without this the composer can only show a bare token count. ``None`` for
+    an id the table doesn't know — a ring at a made-up percentage is worse
+    than no ring.
+    """
+    if not model:
+        return None
+    needle = model.strip().lower()
+    if "claude" in needle:
+        return claude_context_window_for_model(needle)
+    for known in sorted(_ANTIGRAVITY_CONTEXT_WINDOWS, key=len, reverse=True):
+        if needle.startswith(known):
+            return _ANTIGRAVITY_CONTEXT_WINDOWS[known]
+    return None
+
+
 def acp_context(usage: Optional[Mapping[str, Any]]) -> Optional[dict]:
     """Build ``context`` from an ACP ``Usage`` object.
 
@@ -713,6 +745,27 @@ class UsageState:
             self.context = _context_blob(
                 _coerce_int(self.context.get("used_tokens")),
                 max_tokens,
+                self.context_cost_usd,
+            )
+        return True
+
+    def set_context_max(self, max_tokens: Optional[int]) -> bool:
+        """Overwrite the window size — including clearing it — and re-stamp the fill.
+
+        For an agent whose window comes from a static per-model table rather
+        than the wire (Antigravity), the table *is* the authority, so a model
+        switch must be able to replace the value, and a switch to a model the
+        table doesn't know must be able to drop it. ``latch_context_max`` is
+        deliberately sticky and can do neither.
+        """
+        normalized = max_tokens if max_tokens and max_tokens > 0 else None
+        if normalized == self.context_max_tokens:
+            return False
+        self.context_max_tokens = normalized
+        if self.context is not None:
+            self.context = _context_blob(
+                _coerce_int(self.context.get("used_tokens")),
+                normalized,
                 self.context_cost_usd,
             )
         return True

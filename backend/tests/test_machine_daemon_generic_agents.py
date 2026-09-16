@@ -112,6 +112,8 @@ class TestGenericAgentDetection:
             # per-machine agent scan picks them up with no client change.
             "omp",
             "pi",
+            # Antigravity (stream-json driver) — same detection path.
+            "antigravity",
         }
         assert all(agents.values())
 

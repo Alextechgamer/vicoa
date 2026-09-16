@@ -26,7 +26,7 @@ from protocol.acp_catalog import ACP_CATALOG
 
 
 AGENT_CATALOG: dict[str, Any] = {
-    "version": "2026-09-12-1",
+    "version": "2026-09-16-1",
     "min_cli_version": "1.20.0",
     "min_client_version": "0.42.0",
     "agents": [
@@ -268,6 +268,63 @@ AGENT_CATALOG: dict[str, Any] = {
             ],
             # Pi has no approval-mode flag at all, so no permission_modes and
             # no mode picker.
+        },
+        # ---------------------------------------------------------------
+        # Antigravity CLI (integrations/headless/antigravity/) — Google's
+        # `agy`, driven over its stream-json stdio (`--input-format
+        # stream-json`, agy >= 1.1.15). Neither ACP nor an SDK.
+        #
+        # Models: the 2026-09-16 `agy models` list. Every id already encodes
+        # its reasoning effort ("gemini-3.8-flash-high"), a mismatched
+        # `--effort` is a hard startup error and Claude ids reject the flag,
+        # so there is deliberately no `thinking_efforts` here — the effort
+        # picker IS the model picker. `default` keeps agy's own configured
+        # model. The wrapper PATCHes the live list into `available_models`
+        # at session start (cached per machine), so this is a starter set.
+        #
+        # Permissions: headless agy cannot prompt, so nothing here yields an
+        # Approve button. `default` (agy `request-review`) auto-allows
+        # workspace reads and auto-DENIES writes and commands; `acceptEdits`
+        # (`--mode accept-edits`) also allows workspace writes; `plan`
+        # (`--mode plan`) writes a plan artifact first, then behaves like
+        # `default`; `bypassPermissions` is `--dangerously-skip-permissions`.
+        # A denial ends the turn and the wrapper posts one notice explaining
+        # how to unblock it (permissions.allow rules or a new session).
+        # `supports_steer` is unset: the CLI must not be written to mid-turn.
+        # ---------------------------------------------------------------
+        {
+            "id": "antigravity",
+            "label": "Antigravity",
+            "models": [
+                {"id": "default", "label": "Default", "is_default": True},
+                {"id": "gemini-3.8-flash-high", "label": "Gemini 3.8 Flash (High)"},
+                {"id": "gemini-3.8-flash-medium", "label": "Gemini 3.8 Flash (Medium)"},
+                {"id": "gemini-3.8-flash-low", "label": "Gemini 3.8 Flash (Low)"},
+                {"id": "gemini-3.7-flash-high", "label": "Gemini 3.7 Flash (High)"},
+                {"id": "gemini-3.7-flash-medium", "label": "Gemini 3.7 Flash (Medium)"},
+                {"id": "gemini-3.7-flash-low", "label": "Gemini 3.7 Flash (Low)"},
+                {"id": "gemini-3.6-flash-high", "label": "Gemini 3.6 Flash (High)"},
+                {"id": "gemini-3.6-flash-medium", "label": "Gemini 3.6 Flash (Medium)"},
+                {"id": "gemini-3.6-flash-low", "label": "Gemini 3.6 Flash (Low)"},
+                {"id": "gemini-3.1-pro-high", "label": "Gemini 3.1 Pro (High)"},
+                {"id": "gemini-3.1-pro-low", "label": "Gemini 3.1 Pro (Low)"},
+                {"id": "claude-sonnet-4-6", "label": "Claude Sonnet 4.6 (Thinking)"},
+                {
+                    "id": "claude-opus-4-6-thinking",
+                    "label": "Claude Opus 4.6 (Thinking)",
+                },
+                {"id": "gpt-oss-120b-medium", "label": "GPT-OSS 120B (Medium)"},
+            ],
+            "permission_modes": [
+                {
+                    "id": "default",
+                    "label": "Read only (auto-deny writes & commands)",
+                    "is_default": True,
+                },
+                {"id": "acceptEdits", "label": "Write approval (auto-deny commands)"},
+                {"id": "plan", "label": "Plan"},
+                {"id": "bypassPermissions", "label": "Skip permissions (Yolo)"},
+            ],
         },
         # ---------------------------------------------------------------
         # Generic ACP agents (integrations/headless/generic_acp.py).

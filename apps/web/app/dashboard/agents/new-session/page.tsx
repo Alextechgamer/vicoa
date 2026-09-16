@@ -27,7 +27,7 @@ import { MentionTextarea } from '@/components/mention-textarea';
 import { AgentTypeIcon, getAgentLogoSrc } from '@/components/dashboard/agent-type-icon';
 import { PrincipalAvatar } from '@/components/ui/principal-avatar';
 import { agentPrincipal, agentProfileBlockedReason } from '@/lib/use-agent-profiles';
-import { ChipDropdown, ModeIcon, TickItem, modelListWidthClass, modelSublabel } from '@/components/dashboard/session-config-dropdown';
+import { ChipDropdown, ModeIcon, PERMISSION_LIST_WIDTH_CLASS, TickItem, modelListWidthClass, modelSublabel } from '@/components/dashboard/session-config-dropdown';
 import { rpcGitStatus } from '@/components/files-git-panel/rpc';
 import { FilesGitPanel, FilesGitPanelToggle, usePanelState } from '@/components/files-git-panel';
 import {
@@ -2368,7 +2368,7 @@ function NewSessionContent() {
                     {visiblePermission.length > 0 && (
                       <ChipDropdown
                         title="Permission mode"
-                        contentClassName="w-52"
+                        contentClassName={PERMISSION_LIST_WIDTH_CLASS}
                         chip={
                           <>
                             <ModeIcon value={sessionConfig.permission_mode ?? 'default'} className="h-3.5 w-3.5 flex-shrink-0" />
