@@ -5,6 +5,17 @@ description: Release notes for the Vicoa CLI and daemon — new agent support, b
 
 # Vicoa CLI
 
+### v1.9.1
+16 September, 2026
+- Add Google's Antigravity CLI (`agy`, 1.1.15 or newer) as an agent — start and resume sessions, pick a model (each Antigravity model id already carries its effort), switch model or permission mode mid-session, and see its tool calls and token usage as they happen; an action the current permission mode doesn't allow ends the turn with a notice on how to unblock it, since headless agy cannot ask
+- Show Codex and GitHub Copilot usage limits the way Claude's already showed — the daemon reads them from that provider's own sign-in on the machine, and agents without a usage source hide the meter instead of erroring
+- Catalog agents get a real model and permission-mode picker before launch — the daemon probes each agent once per machine and remembers the models and modes it offers, and a permission mode picked for an ACP agent is now actually applied
+- Name a new worktree — the name becomes the branch and the folder, availability is checked by the daemon as you type, and a taken name is reported with the first free `-2`/`-3` suffix suggested rather than silently changed
+- Open a file with the OS default app from the Files panel — macOS `open`, Windows `explorer`, Linux `xdg-open` — with executables refused; on Linux, Reveal now selects the file in the file manager instead of just opening the folder (#63)
+- Report each branch's pull-request state to the app with one `gh pr list` per repository, so the sidebar's coloured branch icons stay clear of GitHub's rate limit; a machine without `gh`, an unauthenticated one or a repo with no GitHub remote just shows the plain icon
+- Fix sessions failing to start with "Headless Claude encountered a fatal error" when the server is slow — registration now retries for up to 20 seconds, the app waits for the session to actually exist before opening it, and a start that still fails reports why instead of leaving an empty session behind
+- Sessions and machines are now shown live from their connection to the server rather than from a 30-second poll, and heartbeats cost the server a fraction of what they did — the load that pushed it into CPU throttling on 14 September is gone
+
 ### v1.9.0
 13 September, 2026
 - Add any ACP agent from a catalog of 33 — `vicoa provider catalog` lists them (Cline, Factory Droid, Qwen Code, Amp, goose, Junie, Kilo and more), `vicoa provider add <id>` makes one available on that machine with no daemon restart, and `vicoa provider check <id>` launches it and reports whether it actually works: its name and version, the models and modes it offers, or the stage it failed at and the last line it wrote to stderr
