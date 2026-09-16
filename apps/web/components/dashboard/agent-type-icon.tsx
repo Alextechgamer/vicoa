@@ -32,6 +32,7 @@ const AGENT_LOGOS: {
   { match: 'copilot',   src: '/images/integrations/githubcopilot.svg', alt: 'Copilot', isOpenAI: true },
   { match: 'kimi',      src: '/images/integrations/kimi-color.svg',    alt: 'Kimi', darkPlate: true },
   { match: 'hermes',    src: '/images/integrations/hermes.svg',        alt: 'Hermes', boxedWhite: true },
+  { match: 'antigravity', src: '/images/integrations/antigravity.svg', alt: 'Antigravity', isOpenAI: true },
   // ORDER MATTERS BELOW. Matching is `name.includes(match)` over this array
   // in order, and 'pi' is a substring of 'copilot' — so a bare 'pi' entry
   // placed any earlier would swallow Copilot (and anything else containing

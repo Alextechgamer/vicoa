@@ -112,6 +112,7 @@ String resumeAgentSlug(String? agentTypeName, {Map<String, dynamic>? sessionConf
   if (name.contains('copilot')) return 'copilot';
   if (name.contains('kimi')) return 'kimi';
   if (name.contains('hermes')) return 'hermes';
+  if (name.contains('antigravity')) return 'antigravity';
   return 'claude';
 }
 
@@ -124,6 +125,8 @@ String? resumeAgentSessionHandle(Map<String, dynamic>? instanceMetadata) {
   if (codex is String && codex.isNotEmpty) return codex;
   final acp = instanceMetadata['acp_session_id'];
   if (acp is String && acp.isNotEmpty) return acp;
+  final agy = instanceMetadata['antigravity_conversation_id'];
+  if (agy is String && agy.isNotEmpty) return agy;
   return null;
 }
 

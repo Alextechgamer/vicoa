@@ -34,6 +34,7 @@ export interface AgentSessionHandles {
    * launch rather than minted by Vicoa.
    */
   pi_session_id?: string | null;
+  antigravity_conversation_id?: string | null;
 }
 
 export interface ResumableInstance {
@@ -214,6 +215,7 @@ export function resumeAgentSlug(instance: ResumableInstance): string {
   if (name.includes('copilot')) return 'copilot';
   if (name.includes('kimi')) return 'kimi';
   if (name.includes('hermes')) return 'hermes';
+  if (name.includes('antigravity')) return 'antigravity';
   // 'pi' is a substring of 'copilot', so both Pi checks must come after every
   // other agent and 'pi' must be the last of them.
   if (name.includes('oh my pi') || name.includes('omp')) return 'omp';
@@ -233,7 +235,13 @@ export function agentSessionHandle(
 ): string | undefined {
   const meta = instance.instance_metadata;
   if (!meta) return undefined;
-  return meta.codex_thread_id ?? meta.acp_session_id ?? meta.pi_session_id ?? undefined;
+  return (
+    meta.codex_thread_id ??
+    meta.acp_session_id ??
+    meta.pi_session_id ??
+    meta.antigravity_conversation_id ??
+    undefined
+  );
 }
 
 /**

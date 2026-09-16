@@ -39,6 +39,7 @@ def test_detect_available_agents_maps_installed_to_true(
         "hermes": False,
         "omp": False,
         "pi": False,
+        "antigravity": False,
     }
 
 

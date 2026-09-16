@@ -72,6 +72,12 @@ export const AGENT_INSTALL_INFO: Record<string, AgentInstallInfo> = {
     command: 'npm install -g @earendil-works/pi-coding-agent',
     docsUrl: 'https://github.com/earendil-works/pi',
   },
+  // Google's installer script; the binary lands in ~/.local/bin and signs in
+  // with a Google account on first run (`agy`). Vicoa needs >= 1.1.15.
+  antigravity: {
+    command: 'curl -fsSL https://antigravity.google/cli/install.sh | bash',
+    docsUrl: 'https://antigravity.google/docs/cli/install',
+  },
 };
 
 /**

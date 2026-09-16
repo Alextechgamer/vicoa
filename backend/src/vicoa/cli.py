@@ -52,9 +52,13 @@ GENERIC_ACP_AGENT_CHOICES = ["cursor", "gemini", "copilot", "kimi", "hermes"]
 # Native-RPC Pi family (integrations/headless/pi_family/). Not ACP — one
 # wrapper, two agents, selected with `--agent`.
 PI_FAMILY_AGENT_CHOICES = ["omp", "pi"]
+# Antigravity CLI (integrations/headless/antigravity/): driven over agy's
+# stream-json stdio, neither ACP nor an SDK.
+ANTIGRAVITY_AGENT_CHOICES = ["antigravity"]
 
 AGENT_CHOICES.extend(GENERIC_ACP_AGENT_CHOICES)
 AGENT_CHOICES.extend(PI_FAMILY_AGENT_CHOICES)
+AGENT_CHOICES.extend(ANTIGRAVITY_AGENT_CHOICES)
 
 
 def sync_project_files_async(api_key: str, base_url: str, project_path: str) -> None:
@@ -686,6 +690,11 @@ def cmd_headless(args, unknown_args):
         # dev `python -m vicoa.cli headless` land here.
         module_name = "integrations.headless.pi_native"
         argv_prog = f"headless_{agent_type}"
+    elif agent_type in ANTIGRAVITY_AGENT_CHOICES:
+        # Same single-route posture as codex/pi: the frozen daemon bundle
+        # (`vicoa headless --agent antigravity`) and a dev run both land here.
+        module_name = "integrations.headless.antigravity.runner"
+        argv_prog = "headless_antigravity"
 
     module = importlib.import_module(module_name)
     headless_main = getattr(module, "main")
@@ -753,6 +762,10 @@ def cmd_headless(args, unknown_args):
                 new_argv.extend(["--permission-mode", args.permission_mode])
             # --model / --thinking-effort are not `headless` subcommand flags,
             # so they arrive in unknown_args and are appended below.
+        if agent_type in ANTIGRAVITY_AGENT_CHOICES:
+            if getattr(args, "permission_mode", None):
+                new_argv.extend(["--permission-mode", args.permission_mode])
+            # --model / --conversation-id arrive in unknown_args, appended below.
 
     # Pass through unknown args to the selected headless runner.
     if unknown_args:
@@ -1211,10 +1224,14 @@ def run_agent_default(args, unknown_args):
     if getattr(args, "name", None):
         env["VICOA_AGENT_DISPLAY_NAME"] = args.name
 
-    if agent in GENERIC_ACP_AGENT_CHOICES or agent in PI_FAMILY_AGENT_CHOICES:
+    if (
+        agent in GENERIC_ACP_AGENT_CHOICES
+        or agent in PI_FAMILY_AGENT_CHOICES
+        or agent in ANTIGRAVITY_AGENT_CHOICES
+    ):
         # These agents integrate via a headless wrapper only (ACP for the
-        # generic set, native RPC for pi/omp); there is no vicoa TUI wrapper
-        # for them.
+        # generic set, native RPC for pi/omp, stream-json for antigravity);
+        # there is no vicoa TUI wrapper for them.
         print(
             f"Terminal (TUI) mode isn't available for '{agent}'. "
             f"Start a session from the Vicoa app or web dashboard, or run:\n"
@@ -1943,6 +1960,7 @@ Examples:
         "opencode",
         *GENERIC_ACP_AGENT_CHOICES,
         *PI_FAMILY_AGENT_CHOICES,
+        *ANTIGRAVITY_AGENT_CHOICES,
     ]
     session_start = session_sub.add_parser(
         "start",
