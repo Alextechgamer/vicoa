@@ -15,6 +15,7 @@ from fastapi import (
     status,
     Response,
 )
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -74,6 +75,7 @@ from servers.shared.db import (
     upsert_machine_agent_models,
 )
 from servers.shared.notification_utils import send_message_notifications
+from servers.presence import presence
 from .auth import get_current_user_id
 from .models import (
     CreateMessageRequest,
@@ -411,27 +413,48 @@ def heartbeat_machine_endpoint(
     user_id: Annotated[str, Depends(get_current_user_id)],
     db: Session = Depends(get_db),
 ) -> RegisterMachineResponse:
+    """Record a daemon heartbeat.
+
+    A tick is an in-memory touch (`servers.presence`); the row's
+    `last_heartbeat_at` is renewed by the batched lease flush, not here. The
+    only write this endpoint still does is a metadata merge when the daemon
+    sends something new — in practice `last_pid`, which changes once per
+    daemon lifetime — so the steady-state tick is one PK read and no
+    transaction. The `machine-update` frame is still emitted on every tick
+    (clients refresh the timestamp from it), but only when someone is
+    connected to receive it.
+    """
     machine = _get_machine_for_user(db, machine_id, user_id)
+    seen_at = presence.touch_machine(machine.id, machine.user_id)
 
-    now = datetime.now(timezone.utc)
-    machine.last_heartbeat_at = now
-    machine.updated_at = now
-
-    if request.metadata:
-        metadata = (
-            machine.machine_metadata
-            if isinstance(machine.machine_metadata, dict)
-            else {}
-        )
-        if metadata is None:
-            metadata = {}
-        metadata.update(request.metadata)
+    incoming = request.metadata or {}
+    current = (
+        machine.machine_metadata if isinstance(machine.machine_metadata, dict) else {}
+    )
+    changed = {k: v for k, v in incoming.items() if current.get(k) != v}
+    if changed:
+        metadata = dict(current)
+        metadata.update(changed)
         machine.machine_metadata = metadata
-
-    db.flush()
-    summary = _machine_summary(machine)
-    _broadcast_machine_update(db, machine, user_id)
-    db.commit()
+        machine.last_heartbeat_at = seen_at
+        machine.updated_at = seen_at
+        db.flush()
+        summary = _machine_summary(machine)
+        _broadcast_machine_update(db, machine, user_id)
+        db.commit()
+    else:
+        # Detach so the fresh timestamp below is for the wire only: the
+        # session is closed without a flush, and the lease flush owns the
+        # column.
+        db.expunge(machine)
+        machine.last_heartbeat_at = seen_at
+        summary = _machine_summary(machine)
+        if connection_manager.has_user_scoped(user_id):
+            connection_manager.broadcast_update(
+                user_id,
+                build_machine_update(machine),
+                [f"user:{user_id}:user-scoped"],
+            )
     return RegisterMachineResponse(
         machine_id=summary.machine_id,
         display_name=summary.display_name,
@@ -440,6 +463,8 @@ def heartbeat_machine_endpoint(
         home_dir=summary.home_dir,
         last_heartbeat_at=summary.last_heartbeat_at,
         metadata=summary.metadata,
+        # See heartbeat_instance: the daemon's socket is the signal.
+        next_interval_seconds=presence.tick_interval_for_machine(machine.id),
     )
 
 
@@ -933,6 +958,19 @@ def _resolve_owned_task_id(db: Session, raw_task_id: str, user_id: str) -> UUID:
     return task_uuid
 
 
+# Statuses a same-owner re-register must not silently adopt (see the
+# idempotent branch in `register_agent_instance_endpoint`).
+_REGISTER_TERMINAL_STATUSES = frozenset(
+    {
+        AgentStatus.COMPLETED,
+        AgentStatus.FAILED,
+        AgentStatus.KILLED,
+        AgentStatus.DISCONNECTED,
+        AgentStatus.DELETED,
+    }
+)
+
+
 def _format_agent_instance(instance: AgentInstance) -> RegisterAgentInstanceResponse:
     metadata = (
         dict(instance.instance_metadata)
@@ -1022,10 +1060,19 @@ def register_agent_instance_endpoint(
                 and existing.instance_metadata
                 and existing.instance_metadata.get("spawn_starting")
             ):
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="Agent instance already exists",
-                )
+                # Same owner, same id, row still live: this is a retry of a
+                # registration whose first attempt succeeded after the client
+                # gave up (registration is idempotent by instance id). Answer
+                # with the row as it stands — the first attempt already
+                # applied the fields — instead of 409, which turned a late
+                # success into a guaranteed failure. A terminal row is still a
+                # conflict: nothing should be re-registering an ended session.
+                if existing.status in _REGISTER_TERMINAL_STATUSES:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="Agent instance already exists",
+                    )
+                return _format_agent_instance(existing)
             # Pre-allocated by a spawn request — activate it.
             existing.status = AgentStatus.ACTIVE
             metadata = dict(existing.instance_metadata)
@@ -1147,7 +1194,25 @@ def register_agent_instance_endpoint(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
         ) from exc
-    except SAIntegrityError:
+    except SAIntegrityError as exc:
+        # Two retries of the same registration can race: both find no row,
+        # both INSERT, the loser hits the primary key. That loser is the same
+        # idempotent re-register as the 200 branch above — read the row the
+        # winner committed and answer with it.
+        if instance_uuid is not None and "agent_instances_pkey" in str(
+            getattr(exc, "orig", exc)
+        ):
+            db.rollback()
+            winner = (
+                db.query(AgentInstance)
+                .filter(
+                    AgentInstance.id == instance_uuid,
+                    AgentInstance.user_id == UUID(user_id),
+                )
+                .first()
+            )
+            if winner is not None:
+                return _format_agent_instance(winner)
         # *_user_id_fkey -> 401 via app-level handler. See companion sites.
         raise
     except Exception as exc:  # pragma: no cover - unexpected failure
@@ -1472,38 +1537,46 @@ async def create_agent_message_endpoint(
     try:
         decoded_git_diff = _maybe_decode_base64(request.git_diff)
 
-        # Use the unified send_agent_message function
-        instance_id, message_id, queued_messages = await send_agent_message(
-            db=db,
-            agent_instance_id=request.agent_instance_id,
-            content=request.content,
-            user_id=user_id,
-            agent_type=request.agent_type,
-            requires_user_input=request.requires_user_input,
-            git_diff=decoded_git_diff,
-            message_metadata=request.message_metadata,
-        )
-        db.flush()
-        message_responses = [
-            MessageResponse(
-                id=str(msg.id),
-                content=msg.content,
-                sender_type=msg.sender_type.value,
-                created_at=msg.created_at.isoformat(),
-                requires_user_input=msg.requires_user_input,
-                message_metadata=msg.message_metadata,
+        def _write() -> tuple[str, str, list[MessageResponse]]:
+            # Every database round-trip of the ingest path happens here, in a
+            # worker thread. This is the hottest write on the server (every
+            # agent output frame); as inline sync work it pinned the event
+            # loop for the whole transaction, so one slow round-trip stalled
+            # every WebSocket and request on the process.
+            instance_id, message_id, queued_messages = send_agent_message(
+                db=db,
+                agent_instance_id=request.agent_instance_id,
+                content=request.content,
+                user_id=user_id,
+                agent_type=request.agent_type,
+                requires_user_input=request.requires_user_input,
+                git_diff=decoded_git_diff,
+                message_metadata=request.message_metadata,
             )
-            for msg in queued_messages
-        ]
-        # The agent posted a message and its instance's status/git_diff
-        # changed — broadcast both (§2.5).
-        message = db.get(Message, UUID(message_id))
-        if message is not None:
-            _broadcast_new_message(db, message, user_id)
-        instance = db.get(AgentInstance, UUID(instance_id))
-        if instance is not None:
-            _broadcast_instance_update(db, instance, user_id)
-        db.commit()
+            db.flush()
+            message_responses = [
+                MessageResponse(
+                    id=str(msg.id),
+                    content=msg.content,
+                    sender_type=msg.sender_type.value,
+                    created_at=msg.created_at.isoformat(),
+                    requires_user_input=msg.requires_user_input,
+                    message_metadata=msg.message_metadata,
+                )
+                for msg in queued_messages
+            ]
+            # The agent posted a message and its instance's status/git_diff
+            # changed — broadcast both (§2.5).
+            message = db.get(Message, UUID(message_id))
+            if message is not None:
+                _broadcast_new_message(db, message, user_id)
+            instance = db.get(AgentInstance, UUID(instance_id))
+            if instance is not None:
+                _broadcast_instance_update(db, instance, user_id)
+            db.commit()
+            return instance_id, message_id, message_responses
+
+        instance_id, message_id, message_responses = await run_in_threadpool(_write)
 
         # Send notifications if requested, after the write commits.
         await send_message_notifications(
@@ -1607,81 +1680,66 @@ def heartbeat_instance(
 ) -> dict:
     """Record a heartbeat for an agent instance.
 
-    - Verifies the instance belongs to the authenticated user
-    - Updates last_heartbeat_at to now()
-    - Returns the updated timestamp
-    """
-    from datetime import datetime, timezone
+    A tick is an in-memory touch (`servers.presence`); the row's
+    `last_heartbeat_at` is renewed by the batched lease flush. Ownership is
+    verified against the database on the first tick from a session and cached
+    for the rest of the process lifetime, so the steady-state tick does no
+    database work at all.
 
-    try:
-        instance = (
-            db.query(AgentInstance)
+    The `instance-update` frame is still emitted per tick because clients
+    refresh `last_heartbeat_at` from it, but only when the user has a
+    dashboard connected to receive it — a frame to an empty room was the
+    common case, and it cost a row read to build.
+
+    The legacy `NOTIFY message_channel_*` that used to accompany every tick
+    is gone: nothing ever consumed its `agent_heartbeat` event — the SSE
+    listeners treat any NOTIFY as a wake-up and run an (empty) cursor query.
+    """
+    owner = UUID(user_id)
+    if not presence.instance_is_known(agent_instance_id, owner):
+        exists = (
+            db.query(AgentInstance.id)
             .filter(
                 AgentInstance.id == agent_instance_id,
-                AgentInstance.user_id == user_id,
+                AgentInstance.user_id == owner,
             )
             .first()
         )
-        if not instance:
+        if exists is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Agent instance not found",
             )
+    seen_at = presence.touch_instance(agent_instance_id, owner)
 
-        heartbeat_at = datetime.now(timezone.utc)
-        instance.last_heartbeat_at = heartbeat_at
-        db.flush()
-        _broadcast_instance_update(db, instance, user_id)
-        db.commit()
-
-        # Legacy NOTIFY: safety net for SSE clients (websocket-migration §2.7,
-        # alive through Wave B). Runs in its own transaction so a NOTIFY
-        # failure doesn't roll back the heartbeat write above, matching the
-        # original "NOTIFY is best-effort" semantics.
-        try:
-            channel_name = f"message_channel_{agent_instance_id}"
-            payload = json.dumps(
-                {
-                    "event_type": "agent_heartbeat",
-                    "instance_id": str(agent_instance_id),
-                    "last_heartbeat_at": heartbeat_at.isoformat() + "Z",
-                }
+    if connection_manager.has_user_scoped(user_id):
+        instance = (
+            db.query(AgentInstance)
+            .filter(
+                AgentInstance.id == agent_instance_id,
+                AgentInstance.user_id == owner,
             )
-            # Quote channel due to hyphens in UUID
-            db.execute(text(f'NOTIFY "{channel_name}", :payload'), {"payload": payload})
-            db.commit()
-        except Exception as notify_err:
-            db.rollback()
-            logger.warning(
-                f"Failed to send agent_heartbeat NOTIFY for {agent_instance_id}: {notify_err}"
+            .first()
+        )
+        if instance is not None:
+            # Detach so the fresh timestamp is for the wire only: the session
+            # closes without a flush, and the lease flush owns the column.
+            db.expunge(instance)
+            instance.last_heartbeat_at = seen_at
+            connection_manager.broadcast_update(
+                user_id,
+                build_instance_update(instance),
+                [f"user:{user_id}:user-scoped"],
             )
 
-        return {
-            "agent_instance_id": str(agent_instance_id),
-            "last_heartbeat_at": heartbeat_at.isoformat() + "Z",
-        }
-    except HTTPException:
-        raise
-    except SAIntegrityError:
-        db.rollback()
-        # *_user_id_fkey -> 401 via app-level handler.
-        raise
-    except SAOperationalError as exc:
-        # Transient flycast disconnect — let the global handler convert
-        # to 503 + Retry-After so the daemon retries naturally.
-        db.rollback()
-        if is_db_disconnect(exc):
-            raise
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal server error: {str(exc)}",
-        )
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal server error: {str(e)}",
-        )
+    return {
+        "agent_instance_id": str(agent_instance_id),
+        "last_heartbeat_at": seen_at.isoformat(),
+        # Server-driven cadence: a client whose session socket is visible here
+        # is told to tick rarely (its socket is the signal); one the server
+        # can't see keeps the 30s fallback. Older clients ignore the field.
+        "next_interval_seconds": presence.tick_interval_for_instance(agent_instance_id),
+    }
 
 
 @agent_router.get("/messages/pending", response_model=GetMessagesResponse)
@@ -1802,58 +1860,79 @@ async def request_user_input_endpoint(
     """
 
     try:
-        # Find the message; verify it is the user's own agent message.
-        message = (
-            db.query(Message)
-            .join(AgentInstance, Message.agent_instance_id == AgentInstance.id)
-            .filter(
-                Message.id == message_id,
-                Message.sender_type == SenderType.AGENT,
-                AgentInstance.user_id == user_id,
-            )
-            .first()
-        )
-        if not message:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Agent message not found or access denied",
-            )
-        if message.requires_user_input:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Message already requires user input",
-            )
 
-        message.requires_user_input = True
-        agent_instance_id = message.agent_instance_id
-        notify_content = message.content
-
-        queued_messages = get_queued_user_messages(db, agent_instance_id, message_id)
-        should_notify = not queued_messages
-        if should_notify:
-            agent_instance = (
-                db.query(AgentInstance)
-                .filter(AgentInstance.id == agent_instance_id)
+        def _write() -> tuple[UUID, str, bool, list[MessageResponse], str]:
+            # All database work off the event loop (see
+            # create_agent_message_endpoint for why).
+            # Find the message; verify it is the user's own agent message.
+            message = (
+                db.query(Message)
+                .join(AgentInstance, Message.agent_instance_id == AgentInstance.id)
+                .filter(
+                    Message.id == message_id,
+                    Message.sender_type == SenderType.AGENT,
+                    AgentInstance.user_id == user_id,
+                )
                 .first()
             )
-            if agent_instance:
-                agent_instance.status = AgentStatus.AWAITING_INPUT
-                db.flush()
-                _broadcast_instance_update(db, agent_instance, user_id)
+            if not message:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Agent message not found or access denied",
+                )
+            if message.requires_user_input:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Message already requires user input",
+                )
 
-        message_responses = [
-            MessageResponse(
-                id=str(msg.id),
-                content=msg.content,
-                sender_type=msg.sender_type.value,
-                created_at=msg.created_at.isoformat(),
-                requires_user_input=msg.requires_user_input,
-                message_metadata=msg.message_metadata,
+            message.requires_user_input = True
+            agent_instance_id = message.agent_instance_id
+            notify_content = message.content
+
+            queued_messages = get_queued_user_messages(
+                db, agent_instance_id, message_id
             )
-            for msg in (queued_messages or [])
-        ]
-        response_status = "ok" if queued_messages is not None else "stale"
-        db.commit()  # commit before FCM: WS broadcast already landed, FCM failure must not roll back DB
+            should_notify = not queued_messages
+            if should_notify:
+                agent_instance = (
+                    db.query(AgentInstance)
+                    .filter(AgentInstance.id == agent_instance_id)
+                    .first()
+                )
+                if agent_instance:
+                    agent_instance.status = AgentStatus.AWAITING_INPUT
+                    db.flush()
+                    _broadcast_instance_update(db, agent_instance, user_id)
+
+            message_responses = [
+                MessageResponse(
+                    id=str(msg.id),
+                    content=msg.content,
+                    sender_type=msg.sender_type.value,
+                    created_at=msg.created_at.isoformat(),
+                    requires_user_input=msg.requires_user_input,
+                    message_metadata=msg.message_metadata,
+                )
+                for msg in (queued_messages or [])
+            ]
+            response_status = "ok" if queued_messages is not None else "stale"
+            db.commit()  # commit before FCM: WS broadcast already landed, FCM failure must not roll back DB
+            return (
+                agent_instance_id,
+                notify_content,
+                should_notify,
+                message_responses,
+                response_status,
+            )
+
+        (
+            agent_instance_id,
+            notify_content,
+            should_notify,
+            message_responses,
+            response_status,
+        ) = await run_in_threadpool(_write)
 
         if should_notify:
             await send_message_notifications(
@@ -1887,7 +1966,7 @@ async def request_user_input_endpoint(
 
 
 @agent_router.patch("/messages/{message_id}/consumed")
-async def mark_message_consumed_endpoint(
+def mark_message_consumed_endpoint(
     message_id: UUID,
     user_id: Annotated[str, Depends(get_current_user_id)],
     db: Session = Depends(get_db),
@@ -1922,7 +2001,7 @@ async def mark_message_consumed_endpoint(
 
 
 @agent_router.patch("/messages/{message_id}/requeue")
-async def requeue_message_endpoint(
+def requeue_message_endpoint(
     message_id: UUID,
     user_id: Annotated[str, Depends(get_current_user_id)],
     db: Session = Depends(get_db),

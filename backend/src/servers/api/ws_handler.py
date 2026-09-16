@@ -50,6 +50,7 @@ from shared.websocket.protocol import (
     terminal_room,
 )
 from shared.websocket.rpc import RpcError, rpc_router
+from servers.presence import broadcast_session_connected, presence
 from servers.shared.db.queries import (
     FetchMessagesResult,
     fetch_session_messages,
@@ -164,6 +165,21 @@ def is_owned(db: Session, resolved: ResolvedHello, user_id: str) -> bool:
             .first()
         )
     return row is not None
+
+
+def _check_ownership_blocking(
+    resolved: ResolvedHello, user_id: str
+) -> tuple[bool, bool]:
+    """(owned, user_alive) for a session/machine hello, on its own session.
+
+    When ownership fails, distinguish "user gone" from "wrong owner" so the
+    daemon's WS client can stop reconnecting on 4401 (credential revoked)
+    without misinterpreting a real ownership mistake (4403) as fatal-auth.
+    The extra PK lookup only runs on the failure path.
+    """
+    with SessionLocal() as db:
+        owned = is_owned(db, resolved, user_id)
+        return owned, (True if owned else _user_exists(db, user_id))
 
 
 def _user_exists(db: Session, user_id: str) -> bool:
@@ -361,8 +377,11 @@ async def handle_rpc_call(conn: Connection, frame: dict) -> None:
             directory = params.get("directory")
             if isinstance(directory, str) and directory.strip():
                 try:
-                    push_recent_directory_after_spawn(
-                        conn.user_id, machine_id, directory.strip()
+                    await asyncio.to_thread(
+                        push_recent_directory_after_spawn,
+                        conn.user_id,
+                        machine_id,
+                        directory.strip(),
                     )
                 except Exception:  # noqa: BLE001 — best-effort post-spawn update
                     logger.exception(
@@ -614,16 +633,11 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
 
     # --- ownership check for session/machine scopes (§2.9) ---
     if resolved.scope in ("session-scoped", "machine-scoped"):
-        with SessionLocal() as db:
-            owned = is_owned(db, resolved, user_id)
-            # When ownership fails, distinguish "user gone" from "wrong
-            # owner" so the daemon's WS client can stop reconnecting on
-            # 4401 (credential revoked) without misinterpreting a real
-            # ownership mistake (4403) as fatal-auth. Extra PK lookup
-            # only runs on the failure path — same one-time cost as
-            # Phase 1b would have charged on heartbeats, but at WS
-            # handshake frequency instead of every-30s heartbeat.
-            user_alive = True if owned else _user_exists(db, user_id)
+        # Off the event loop: after a deploy every daemon and runner
+        # reconnects at once, and this lookup ran inline for each of them.
+        owned, user_alive = await asyncio.to_thread(
+            _check_ownership_blocking, resolved, user_id
+        )
         if not owned:
             if user_alive:
                 logger.info("WS ownership check failed for %s", resolved.scope)
@@ -680,10 +694,18 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         scope=resolved.scope,
         rooms=frozenset({resolved.room}),
         machine_id=resolved.machine_id,
+        instance_id=resolved.instance_id,
         on_overflow=_on_overflow,
         on_revoked=_on_revoked,
     )
     connection_manager.register(conn)
+    # The socket is the liveness signal (servers/presence.py): its presence
+    # keeps the row's lease renewed and, for a dashboard watching, a connect
+    # is the moment the session reads as live again — say so right away
+    # rather than on the next refresh sweep.
+    presence.note_connected(conn)
+    if conn.scope == "session-scoped":
+        await asyncio.to_thread(broadcast_session_connected, conn)
     try:
         await websocket.send_json(
             {
@@ -698,6 +720,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         logger.info("WS %s client disconnected before server_info", conn.connection_id)
     finally:
         connection_manager.unregister(conn)
+        presence.note_disconnected(conn)
         # Drop this daemon's RPC handlers and fail its in-flight calls (§2.8).
         # A no-op for non-daemon connections.
         rpc_router.unregister(conn)
