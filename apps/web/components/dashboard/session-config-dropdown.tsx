@@ -6,7 +6,6 @@ import {
   ChevronDown,
   Flame,
   Hammer,
-  Info,
   Loader2,
   NotebookPen,
   PencilLine,
@@ -49,7 +48,6 @@ export interface SessionConfigChipsProps {
   currentPermissionMode?: string | null;
   pendingPermissionMode?: string | null;
   onPermissionModeChange?: (mode: string) => void;
-  showYoloInfo?: boolean;
   // OpenCode mode
   opencodeModes?: { value: string; label: string }[];
   currentOpencodeMode?: string | null;
@@ -84,7 +82,6 @@ export function TickItem({
   disabled,
   onClick,
   leading,
-  yoloInfo,
 }: {
   label: string;
   /** Muted trailing text — the raw model id when the label alone doesn't name it. */
@@ -94,7 +91,6 @@ export function TickItem({
   disabled?: boolean;
   onClick: () => void;
   leading?: React.ReactNode;
-  yoloInfo?: boolean;
 }) {
   return (
     <button
@@ -123,16 +119,6 @@ export function TickItem({
           <Check className="h-3.5 w-3.5" />
         ) : null}
       </span>
-      {yoloInfo && (
-        <span className="relative inline-flex flex-shrink-0 items-center text-muted-foreground" aria-label="YOLO mode availability">
-          <span className="group inline-flex items-center" tabIndex={0}>
-            <Info className="h-3.5 w-3.5" />
-            <span className="pointer-events-none absolute right-full top-0 z-50 mr-2 w-72 rounded-md border border-border bg-popover px-2 py-1 text-[11px] font-normal normal-case text-foreground opacity-0 shadow-md transition-opacity duration-100 group-hover:opacity-100 group-focus-visible:opacity-100">
-              YOLO mode appears only for sessions started from the web or mobile, or launched with --dangerously-skip-permissions in the CLI.
-            </span>
-          </span>
-        </span>
-      )}
     </button>
   );
 }
@@ -250,7 +236,6 @@ export function SessionConfigChips({
   currentPermissionMode,
   pendingPermissionMode,
   onPermissionModeChange,
-  showYoloInfo = false,
   opencodeModes,
   currentOpencodeMode,
   pendingOpencodeMode,
@@ -366,7 +351,6 @@ export function SessionConfigChips({
                 isPending={mode.value === pendingPermissionMode}
                 disabled={!!pendingPermissionMode}
                 onClick={() => { onPermissionModeChange!(mode.value); close(); }}
-                yoloInfo={showYoloInfo && mode.value === 'bypassPermissions'}
               />
             ))
           }

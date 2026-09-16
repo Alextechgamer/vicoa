@@ -900,7 +900,6 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, ChatInputProps>(functi
               currentPermissionMode={permissionMode}
               pendingPermissionMode={pendingPermissionMode}
               onPermissionModeChange={onPermissionModeChange as ((mode: string) => void) | undefined}
-              showYoloInfo={agentType === 'claude'}
               opencodeModes={isOpencodeAgent ? (sessionOpencodeModes ?? opencodeAgentModes) : undefined}
               currentOpencodeMode={opencodeAgentMode}
               pendingOpencodeMode={pendingOpencodeAgentMode}
