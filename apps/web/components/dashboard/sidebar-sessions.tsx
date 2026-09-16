@@ -88,8 +88,10 @@ import {
   rpcGitStatus,
   rpcGitWorktreeList,
   rpcGitWorktreeRemove,
+  rpcGithubPrListCached,
   type WorktreeInfo,
 } from '@/components/files-git-panel/rpc';
+import type { PrInfo } from '@/components/dashboard/pr-status';
 
 // Selected-row highlight, shared between session rows and the view-options menu.
 const ITEM_SELECTED = 'bg-foreground/[0.08] dark:bg-foreground/10 text-foreground';
@@ -112,6 +114,9 @@ interface ProjectGitView {
   /** Session folders that existed when `worktrees` was fetched — the only ones
       the list can vouch for (see `splitProjectByWorktree`'s `judgeable`). */
   judgeable: ReadonlySet<string>;
+  /** This repo's open/merged/closed PRs keyed by head branch, for the branch
+      icons. Empty when the repo has no GitHub remote or `gh` is unavailable. */
+  prs: Record<string, PrInfo>;
 }
 
 /** One rendered row-group under a project: the main folder or a worktree. */
@@ -128,6 +133,8 @@ interface RenderedSubGroup {
   /** Right-click delete target, or null when not removable (main / unmanaged).
       `repoDir` is the main checkout every worktree RPC runs from. */
   remove: { machineId: string; repoDir: string; path: string; branch: string } | null;
+  /** This group's branch PR, when it has one — colors the branch icon. */
+  pr: PrInfo | null;
 }
 
 /**
@@ -181,15 +188,21 @@ function useProjectWorktrees(
           // Captured before the RPCs go out: a folder that appears while they
           // are in flight is not something this list can speak for either.
           const judgeable = new Set(t.worktreePaths);
-          const [worktrees, branch] = await Promise.all([
+          const [worktrees, branch, prs] = await Promise.all([
             rpcGitWorktreeList(machineId, t.listPath).catch(() => null),
             t.mainPath
               ? rpcGitStatus(machineId, t.mainPath)
                   .then((s) => s.branch)
                   .catch(() => null)
               : Promise.resolve<string | null>(null),
+            // Cached with a TTL, unlike the two local-git calls beside it: this
+            // one spends a GitHub API request per call, and `focus` fires as
+            // often as the user alt-tabs.
+            rpcGithubPrListCached(machineId, t.listPath).catch(
+              () => ({}) as Record<string, PrInfo>,
+            ),
           ]);
-          return [t.key, { branch, worktrees, judgeable }] as const;
+          return [t.key, { branch, worktrees, judgeable, prs }] as const;
         }),
       );
       if (cancelled) return;
@@ -740,6 +753,8 @@ export function SidebarSessions({
             .find((r): r is string => typeof r === 'string' && r.length > 0) ??
           null;
         const subs: RenderedSubGroup[] = [];
+        const prFor = (b: string | null | undefined): PrInfo | null =>
+          (b && view?.prs[b]) || null;
         if (mainInstances.length > 0) {
           subs.push({
             key: `${key}::__main__`,
@@ -748,6 +763,9 @@ export function SidebarSessions({
             directory: mainDirectory,
             missing: false,
             remove: null,
+            // The default branch rarely has a PR of its own; when it does
+            // (a release branch checked out as main) it labels correctly.
+            pr: prFor(view?.branch),
           });
         }
         for (const w of worktrees) {
@@ -775,6 +793,7 @@ export function SidebarSessions({
                   branch: w.branch,
                 }
               : null,
+            pr: prFor(w.branch),
           });
         }
         if (subs.length === 0) return notSplit;
@@ -1332,6 +1351,7 @@ export function SidebarSessions({
                                     newSessionDirectory={rsub.directory}
                                     worktreeBranch={rsub.worktreeBranch}
                                     missing={rsub.missing}
+                                    pr={rsub.pr}
                                     onNavigate={router.push}
                                     onRequestDelete={
                                       remove
