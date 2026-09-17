@@ -14,6 +14,8 @@ import logging
 from typing import Any, Awaitable, Callable, Protocol
 from uuid import UUID
 
+from sqlalchemy.exc import OperationalError as SAOperationalError
+
 logger = logging.getLogger(__name__)
 
 # --- user creation (welcome email, etc.) --------------------------------------
@@ -62,6 +64,81 @@ def run_user_delete_hooks(db: Any, user_id: UUID) -> None:
     """
     for fn in _user_delete_hooks:
         fn(db, user_id)
+
+
+# --- capabilities (seat gating) -----------------------------------------------
+# The collaboration mechanics (grants, teams, sharing) all ship in the open
+# core; only seat *gating* and seat *billing* live in the overlay
+# (collaboration plan §6). The core declares the capabilities it checks and
+# asks the registry before the metered action; the overlay registers a hook
+# that reads the subscription and answers with a denial reason. An empty
+# registry — the open / self-hosted build — allows everything, so self-hosting
+# is unmetered exactly like the cloud-absent path everywhere else.
+#
+# Capabilities the core checks today:
+#   collab.team_seat   — adding a member to a team (context: team_id, seats)
+#   collab.grant_write — an editor/admin project grant to someone outside the
+#                        owner's teams (context: project_id, role, principal_type)
+CAPABILITY_TEAM_SEAT = "collab.team_seat"
+CAPABILITY_GRANT_WRITE = "collab.grant_write"
+
+# Returns a human-readable denial reason, or None to allow.
+CapabilityHook = Callable[[Any, UUID, str, dict[str, Any]], str | None]
+_capability_hooks: list[CapabilityHook] = []
+
+
+class CapabilityDenied(Exception):
+    """A registered hook refused ``capability`` for this user.
+
+    The API layer turns it into ``402 Payment Required`` carrying the reason
+    and the capability name, so a client can show the upgrade path.
+    """
+
+    def __init__(self, capability: str, reason: str) -> None:
+        super().__init__(reason)
+        self.capability = capability
+        self.reason = reason
+
+
+def register_capability_hook(fn: CapabilityHook) -> CapabilityHook:
+    _capability_hooks.append(fn)
+    return fn
+
+
+def check_capability(
+    db: Any, user_id: UUID, capability: str, context: dict[str, Any]
+) -> None:
+    """Raise ``CapabilityDenied`` if any registered hook denies. Empty registry
+    ⇒ allow. A hook that *raises* is treated as a denial too — failing open on
+    a billing error would hand out seats for free.
+
+    The one exception is a transient database error. Re-raising it still denies
+    the action (the request aborts), but it aborts as ``503 + Retry-After`` via
+    ``backend.main``'s handler instead of telling a *paying* customer to
+    upgrade — a 402 is a statement about their subscription, and a flycast
+    blip is not evidence about their subscription.
+    """
+    for fn in _capability_hooks:
+        try:
+            reason = fn(db, user_id, capability, context)
+        except CapabilityDenied:
+            raise
+        except SAOperationalError:
+            logger.warning(
+                "capability hook %r hit a database error for %s; surfacing as 503",
+                getattr(fn, "__name__", fn),
+                capability,
+            )
+            raise
+        except Exception:
+            logger.exception(
+                "capability hook %r failed for %s",
+                getattr(fn, "__name__", fn),
+                capability,
+            )
+            raise CapabilityDenied(capability, "Capability check failed")
+        if reason:
+            raise CapabilityDenied(capability, reason)
 
 
 # --- FastAPI app setup (extra routers) ----------------------------------------
