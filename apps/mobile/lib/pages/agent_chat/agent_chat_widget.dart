@@ -16,6 +16,8 @@ import '/pages/agent_chat/components/chat_input_area.dart';
 import '/pages/agent_chat/components/ask_user_question_panel.dart';
 import '/pages/agent_chat/components/message_attachments.dart';
 import '/pages/agent_chat/components/message_queue_status.dart';
+import '/pages/agent_chat/components/send_status_indicator.dart';
+import '/pages/confirm_dialog/confirm_dialog_widget.dart';
 import '/pages/agent_chat/components/queued_messages_bar.dart';
 import '/pages/agent_chat/components/session_loading_indicator.dart';
 import '/pages/agent_chat/components/chat_block_spacing.dart';
@@ -1072,6 +1074,9 @@ class _AgentChatWidgetState extends State<AgentChatWidget> with RouteAware, Tick
     final messageQueueStatus = isUser ? queueStatus(message) : null;
     final isQueuedMessage = messageQueueStatus == kQueueStatusQueued;
     final isCancelledMessage = messageQueueStatus == kQueueStatusCancelled;
+    // Local send state (sending / failed) of an optimistic user message —
+    // rendered as a mark beside the bubble, never inside it.
+    final messageSendStatus = isUser ? sendStatus(message) : null;
 
     // Queued (and cancelled-before-consumed) user messages never enter the
     // transcript — they're staged in the queue bar above the input until the
@@ -1439,8 +1444,17 @@ class _AgentChatWidgetState extends State<AgentChatWidget> with RouteAware, Tick
       ),
       child: Row(
         mainAxisAlignment: isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: messageSendStatus != null
+            ? CrossAxisAlignment.center
+            : CrossAxisAlignment.start,
         children: [
+          if (messageSendStatus != null)
+            SendStatusIndicator(
+              key: ValueKey('send_status_$messageId'),
+              status: messageSendStatus,
+              sentAt: sentAt(message),
+              onTap: () => _confirmResend(messageId),
+            ),
           Flexible(
             child: LayoutBuilder(
               builder: (context, constraints) {
@@ -1969,6 +1983,25 @@ class _AgentChatWidgetState extends State<AgentChatWidget> with RouteAware, Tick
       onCancel: _cancelQueuedMessage,
       onRevert: _revertQueuedMessage,
     );
+  }
+
+  /// Tap on a failed bubble's red mark: the app's confirm dialog asks
+  /// "Resend this message?" and only Confirm resends. Never a single tap —
+  /// a resend can duplicate. Tapping outside is a cancel.
+  Future<void> _confirmResend(String messageId) async {
+    final shouldResend = await showDialog<bool>(
+          context: context,
+          builder: (_) => Dialog(
+            backgroundColor: Colors.transparent,
+            child: ConfirmDialogWidget(
+              title: AppLocalizations.of(context).agentChatResendPrompt,
+              content: null,
+            ),
+          ),
+        ) ??
+        false;
+    if (!shouldResend || !mounted) return;
+    await _model.resendMessage(context, messageId);
   }
 
   /// Pulls a still-queued message back into the composer for editing: appends

@@ -289,6 +289,15 @@ class AppLocalizationsZh extends AppLocalizations {
   String get agentChatRenameFailed => '重命名任务失败，请重试。';
 
   @override
+  String get agentChatSendFailed => '发送失败，请检查网络后重试。';
+
+  @override
+  String get agentChatNotSentTapToRetry => '未发送，点按重试。';
+
+  @override
+  String get agentChatResendPrompt => '重新发送这条消息？';
+
+  @override
   String get agentChatSessionReady => '任务已就绪';
 
   @override
