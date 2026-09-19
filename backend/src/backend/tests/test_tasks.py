@@ -1257,6 +1257,658 @@ class TestProjectAutoCreate:
         assert dirs[0].local_path == "/home/nick/alpha"  # not narrowed
 
 
+class TestProjectMatchMachineless:
+    """Registrations without a machine (no daemon yet, old client, container).
+
+    Such a session can never get a directory row, so a path-only project
+    minted for it would be an orphan — unreachable by any later match, and the
+    next machine-less session in the same folder would mint another (prod had
+    51 of these across 26 users before this rule). Instead: match by path on
+    any of the user's machines, create only when there is a remote to match by
+    later, else leave the session unfiled.
+    """
+
+    def _count(self, db, user_id):
+        return db.query(Project).filter(Project.user_id == user_id).count()
+
+    def _link(self, db, user_id, machine_id, local_path, name="Proj", **kw):
+        project = Project(user_id=user_id, name=name, **kw)
+        db.add(project)
+        db.flush()
+        db.add(
+            ProjectDirectory(
+                user_id=user_id,
+                project_id=project.id,
+                machine_id=machine_id,
+                local_path=local_path,
+            )
+        )
+        db.commit()
+        return project
+
+    def test_no_machine_no_remote_no_match_stays_unfiled(self, test_db, test_user):
+        from shared.database.project_matching import (
+            resolve_or_create_project_id_for_session,
+        )
+
+        pid = resolve_or_create_project_id_for_session(
+            test_db, test_user.id, None, "~/work/scratch", home_dir="/home/nick"
+        )
+        test_db.commit()
+        assert pid is None
+        assert self._count(test_db, test_user.id) == 0
+
+    def test_no_machine_with_remote_creates_remote_keyed_project(
+        self, test_db, test_user
+    ):
+        """A remote makes the project reachable again (tier 1), so create it —
+        but with no machine there is no directory row to write."""
+        from shared.database.project_matching import (
+            resolve_or_create_project_id_for_session,
+        )
+
+        remote = "git@github.com:vicoa-ai/alpha.git"
+        pid = resolve_or_create_project_id_for_session(
+            test_db,
+            test_user.id,
+            None,
+            "/tmp/alpha",
+            git_remote_url=remote,
+            repo_root="/tmp/alpha",
+        )
+        test_db.commit()
+        assert pid is not None
+        project = test_db.get(Project, pid)
+        assert project.git_remote_url == remote
+        assert (
+            test_db.query(ProjectDirectory)
+            .filter(ProjectDirectory.project_id == pid)
+            .count()
+            == 0
+        )
+        # …and a later daemon-backed session in the same repo lands on it.
+        machine = _make_machine(test_db, test_user.id)
+        again = resolve_or_create_project_id_for_session(
+            test_db,
+            test_user.id,
+            machine.id,
+            "~/alpha",
+            git_remote_url=remote,
+            repo_root="~/alpha",
+            home_dir="/home/nick",
+        )
+        test_db.commit()
+        assert again == pid
+        assert self._count(test_db, test_user.id) == 1
+
+    def test_no_machine_matches_path_on_any_machine(self, test_db, test_user):
+        """The plugin on a box whose daemon is registered elsewhere: the same
+        ~-relative folder is the same project."""
+        from shared.database.project_matching import (
+            resolve_or_create_project_id_for_session,
+        )
+
+        machine = _make_machine(test_db, test_user.id)
+        project = self._link(test_db, test_user.id, machine.id, "~/work/wedding")
+
+        pid = resolve_or_create_project_id_for_session(
+            test_db, test_user.id, None, "~/work/wedding/site", home_dir="/root"
+        )
+        test_db.commit()
+        assert pid == project.id
+        assert self._count(test_db, test_user.id) == 1
+
+    def test_no_machine_tie_across_machines_picks_oldest(self, test_db, test_user):
+        from shared.database.project_matching import resolve_project_id_for_session
+
+        machine_a = _make_machine(test_db, test_user.id, display_name="A")
+        machine_b = _make_machine(test_db, test_user.id, display_name="B")
+        older = self._link(test_db, test_user.id, machine_a.id, "~/x", name="older")
+        older.created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        newer = self._link(test_db, test_user.id, machine_b.id, "~/x", name="newer")
+        newer.created_at = datetime(2026, 6, 1, tzinfo=timezone.utc)
+        test_db.commit()
+
+        assert (
+            resolve_project_id_for_session(test_db, test_user.id, None, "~/x/sub")
+            == older.id
+        )
+
+    def test_with_machine_path_match_stays_per_machine(self, test_db, test_user):
+        """The cross-machine lookup is only for sessions without a machine."""
+        from shared.database.project_matching import resolve_project_id_for_session
+
+        machine_a = _make_machine(test_db, test_user.id, display_name="A")
+        machine_b = _make_machine(test_db, test_user.id, display_name="B")
+        self._link(test_db, test_user.id, machine_a.id, "~/x")
+
+        assert (
+            resolve_project_id_for_session(test_db, test_user.id, machine_b.id, "~/x")
+            is None
+        )
+
+
+class TestProjectMatchPathForms:
+    """Both sides of a path comparison are canonicalized (~, \\, trailing /)."""
+
+    def _link(self, db, user_id, machine_id, local_path, name="Proj", **kw):
+        project = Project(user_id=user_id, name=name, **kw)
+        db.add(project)
+        db.flush()
+        db.add(
+            ProjectDirectory(
+                user_id=user_id,
+                project_id=project.id,
+                machine_id=machine_id,
+                local_path=local_path,
+            )
+        )
+        db.commit()
+        return project
+
+    def test_absolute_session_path_matches_tilde_row(self, test_db, test_user):
+        """A wrapper whose HOME differs from the daemon's (e2e, containers)
+        reports absolute paths; the linked row is ~-form. Same folder."""
+        from shared.database.project_matching import (
+            resolve_or_create_project_id_for_session,
+        )
+
+        machine = _make_machine(test_db, test_user.id)
+        project = self._link(test_db, test_user.id, machine.id, "~/projects/vicoa")
+
+        pid = resolve_or_create_project_id_for_session(
+            test_db,
+            test_user.id,
+            machine.id,
+            "/Users/nick/vicoa/workspaces/vicoa-worktrees/x/vicoa/backend",
+            git_remote_url="git@github.com:vicoa-ai/vicoa.git",
+            repo_root="/Users/nick/projects/vicoa",
+            home_dir="/Users/nick",
+        )
+        test_db.commit()
+        assert pid == project.id
+        assert (
+            test_db.query(Project).filter(Project.user_id == test_user.id).count() == 1
+        )
+
+    def test_tilde_session_path_matches_absolute_row(self, test_db, test_user):
+        from shared.database.project_matching import resolve_project_id_for_session
+
+        machine = _make_machine(test_db, test_user.id)
+        project = self._link(test_db, test_user.id, machine.id, "/home/nick/alpha")
+        assert (
+            resolve_project_id_for_session(
+                test_db, test_user.id, machine.id, "~/alpha/src", home_dir="/home/nick"
+            )
+            == project.id
+        )
+
+    def test_windows_backslash_paths(self, test_db, test_user):
+        from shared.database.project_matching import (
+            resolve_or_create_project_id_for_session,
+        )
+
+        machine = _make_machine(test_db, test_user.id)
+        pid = resolve_or_create_project_id_for_session(
+            test_db,
+            test_user.id,
+            machine.id,
+            "~\\cp-pilot",
+            home_dir="C:\\Users\\hans",
+        )
+        test_db.commit()
+        assert pid is not None
+        assert test_db.get(Project, pid).name == "cp-pilot"  # not "~\\cp-pilot"
+        # A session in a subfolder, reported with backslashes, matches it.
+        again = resolve_or_create_project_id_for_session(
+            test_db,
+            test_user.id,
+            machine.id,
+            "~\\cp-pilot\\src",
+            home_dir="C:\\Users\\hans",
+        )
+        test_db.commit()
+        assert again == pid
+
+    def test_tilde_home_is_not_a_project(self, test_db, test_user):
+        """Wrappers collapse HOME to ``~``; that is the home dir, not a repo
+        called ``~`` (prod grew ~10 of those)."""
+        from shared.database.project_matching import (
+            resolve_or_create_project_id_for_session,
+        )
+
+        machine = _make_machine(test_db, test_user.id)
+        for cwd, home in (
+            ("~", "/home/nick"),
+            ("~/", "/home/nick"),
+            ("~", None),
+            ("~\\", "C:\\Users\\hans"),
+            ("C:\\", "C:\\Users\\hans"),
+        ):
+            assert (
+                resolve_or_create_project_id_for_session(
+                    test_db, test_user.id, machine.id, cwd, home_dir=home
+                )
+                is None
+            ), cwd
+        test_db.commit()
+        assert (
+            test_db.query(Project).filter(Project.user_id == test_user.id).count() == 0
+        )
+
+
+class TestProjectRemoteBackfill:
+    """A folder-linked project learns its remote from the first session that
+    reports one, so identity (tier 1) finds it from then on."""
+
+    def _link(self, db, user_id, machine_id, local_path, name="Proj", **kw):
+        project = Project(user_id=user_id, name=name, **kw)
+        db.add(project)
+        db.flush()
+        db.add(
+            ProjectDirectory(
+                user_id=user_id,
+                project_id=project.id,
+                machine_id=machine_id,
+                local_path=local_path,
+            )
+        )
+        db.commit()
+        return project
+
+    def test_repo_root_equals_linked_folder_stamps_remote(self, test_db, test_user):
+        """The prod case: a hand-made 'Vicoa' linked to ~/projects/vicoa with
+        no remote; a session there reports the remote → stamped, and a later
+        machine-less worktree session finds it by identity instead of minting
+        a twin."""
+        from shared.database.project_matching import (
+            resolve_or_create_project_id_for_session,
+        )
+
+        machine = _make_machine(test_db, test_user.id)
+        project = self._link(test_db, test_user.id, machine.id, "~/projects/vicoa")
+        remote = "git@github.com:vicoa-ai/vicoa.git"
+
+        pid = resolve_or_create_project_id_for_session(
+            test_db,
+            test_user.id,
+            machine.id,
+            "~/projects/vicoa",
+            git_remote_url=remote,
+            repo_root="~/projects/vicoa",
+            home_dir="/Users/nick",
+        )
+        test_db.commit()
+        assert pid == project.id
+        test_db.refresh(project)
+        assert project.git_remote_url == remote
+
+        twin = resolve_or_create_project_id_for_session(
+            test_db,
+            test_user.id,
+            None,
+            "/Users/nick/vicoa/workspaces/vicoa-worktrees/x/vicoa",
+            git_remote_url=remote,
+            repo_root="/Users/nick/projects/vicoa",
+            home_dir="/var/folders/tmp",
+        )
+        test_db.commit()
+        assert twin == project.id
+        assert (
+            test_db.query(Project).filter(Project.user_id == test_user.id).count() == 1
+        )
+
+    def test_parent_folder_link_is_not_stamped(self, test_db, test_user):
+        """An umbrella folder linked as a project holds many repos; a session
+        in one of them must not brand the umbrella with that repo's remote."""
+        from shared.database.project_matching import (
+            resolve_or_create_project_id_for_session,
+        )
+
+        machine = _make_machine(test_db, test_user.id)
+        umbrella = self._link(test_db, test_user.id, machine.id, "~/projects")
+
+        pid = resolve_or_create_project_id_for_session(
+            test_db,
+            test_user.id,
+            machine.id,
+            "~/projects/vicoa",
+            git_remote_url="git@github.com:vicoa-ai/vicoa.git",
+            repo_root="~/projects/vicoa",
+            home_dir="/Users/nick",
+        )
+        test_db.commit()
+        assert pid == umbrella.id  # longest link still wins for attribution…
+        test_db.refresh(umbrella)
+        assert umbrella.git_remote_url is None  # …but its identity is untouched
+
+    def test_existing_remote_is_never_overwritten(self, test_db, test_user):
+        from shared.database.project_matching import (
+            resolve_or_create_project_id_for_session,
+        )
+
+        machine = _make_machine(test_db, test_user.id)
+        project = self._link(
+            test_db,
+            test_user.id,
+            machine.id,
+            "~/alpha",
+            git_remote_url="git@github.com:vicoa-ai/alpha.git",
+        )
+        # Same folder, a different remote reported (e.g. the user re-pointed
+        # origin): tier 1 misses, tier 2 hits — the stored remote stays.
+        pid = resolve_or_create_project_id_for_session(
+            test_db,
+            test_user.id,
+            machine.id,
+            "~/alpha",
+            git_remote_url="git@github.com:fork/alpha.git",
+            repo_root="~/alpha",
+            home_dir="/home/nick",
+        )
+        test_db.commit()
+        assert pid == project.id
+        test_db.refresh(project)
+        assert project.git_remote_url == "git@github.com:vicoa-ai/alpha.git"
+
+    def test_shared_project_is_not_stamped_by_a_member(
+        self, test_db, test_user, other_user
+    ):
+        """A member's clone matching the team project by folder must not
+        rewrite the team project's identity."""
+        from shared.database.project_matching import (
+            resolve_or_create_project_id_for_session,
+        )
+
+        team_project = Project(user_id=other_user.id, name="team")
+        test_db.add(team_project)
+        test_db.flush()
+        test_db.add(
+            ProjectGrant(
+                project_id=team_project.id,
+                principal_type="user",
+                principal_id=test_user.id,
+                role="editor",
+                scopes=["tasks", "sessions"],
+            )
+        )
+        member_machine = _make_machine(test_db, test_user.id)
+        test_db.add(
+            ProjectDirectory(
+                user_id=test_user.id,
+                project_id=team_project.id,
+                machine_id=member_machine.id,
+                local_path="~/team",
+            )
+        )
+        test_db.commit()
+
+        pid = resolve_or_create_project_id_for_session(
+            test_db,
+            test_user.id,
+            member_machine.id,
+            "~/team",
+            git_remote_url="git@github.com:team/team.git",
+            repo_root="~/team",
+            home_dir="/home/member",
+        )
+        test_db.commit()
+        assert pid == team_project.id
+        test_db.refresh(team_project)
+        assert team_project.git_remote_url is None
+
+
+class TestProjectLinkAdoption:
+    """Linking a directory adopts the unfiled sessions that already ran there.
+
+    Prod had 2,283 sessions (10 users) sitting at ``project_id IS NULL`` next
+    to a same-named project: 2,280 predated the project (auto-create linked
+    the folder but never ran the backfill), the rest had registered with no
+    machine (the backfill was machine-scoped). The sidebar renders those as a
+    basename twin of the real project. Both a manual "save directory" and the
+    matcher's own link now run one backfill that also takes machine-less rows
+    and compares paths canonically.
+    """
+
+    def _instance(
+        self,
+        db,
+        user_id,
+        agent_type_id,
+        machine_id,
+        project,
+        *,
+        home_dir="/home/nick",
+        project_id=None,
+        metadata=None,
+    ):
+        from shared.database import AgentInstance
+
+        inst = AgentInstance(
+            id=uuid4(),
+            agent_type_id=agent_type_id,
+            user_id=user_id,
+            status=AgentStatus.COMPLETED,
+            machine_id=machine_id,
+            project=project,
+            home_dir=home_dir,
+            project_id=project_id,
+            instance_metadata=metadata or {},
+        )
+        db.add(inst)
+        db.commit()
+        return inst
+
+    def test_backfill_adopts_machineless_sessions_under_the_path(
+        self, test_db, test_user, test_agent_type
+    ):
+        from shared.database.project_matching import backfill_project_id_for_directory
+
+        machine = _make_machine(test_db, test_user.id)
+        other_machine = _make_machine(test_db, test_user.id, display_name="Server")
+        project = Project(user_id=test_user.id, name="alpha")
+        test_db.add(project)
+        test_db.flush()
+
+        on_machine = self._instance(
+            test_db, test_user.id, test_agent_type.id, machine.id, "~/alpha"
+        )
+        no_machine = self._instance(
+            test_db, test_user.id, test_agent_type.id, None, "~/alpha/sub"
+        )
+        no_machine_worktree = self._instance(
+            test_db,
+            test_user.id,
+            test_agent_type.id,
+            None,
+            "~/vicoa/workspaces/alpha-worktrees/feat/alpha",
+            metadata={"repo_root": "~/alpha"},
+        )
+        other_box = self._instance(
+            test_db, test_user.id, test_agent_type.id, other_machine.id, "~/alpha"
+        )
+        no_machine_elsewhere = self._instance(
+            test_db, test_user.id, test_agent_type.id, None, "~/alphabet"
+        )
+
+        stamped = backfill_project_id_for_directory(
+            test_db,
+            user_id=test_user.id,
+            project_id=project.id,
+            machine_id=machine.id,
+            local_path="~/alpha",
+        )
+        test_db.commit()
+        assert stamped == 3
+        for inst in (
+            on_machine,
+            no_machine,
+            no_machine_worktree,
+            other_box,
+            no_machine_elsewhere,
+        ):
+            test_db.refresh(inst)
+        assert on_machine.project_id == project.id
+        assert no_machine.project_id == project.id
+        assert no_machine_worktree.project_id == project.id  # by repo_root
+        # Another machine's session is that machine's link to make, not this one's.
+        assert other_box.project_id is None
+        # Path boundary: ``~/alphabet`` is not under ``~/alpha``.
+        assert no_machine_elsewhere.project_id is None
+
+    def test_backfill_compares_paths_canonically(
+        self, test_db, test_user, test_agent_type
+    ):
+        """``~`` on one side and the session's absolute home on the other match."""
+        from shared.database.project_matching import backfill_project_id_for_directory
+
+        machine = _make_machine(test_db, test_user.id)
+        project = Project(user_id=test_user.id, name="alpha")
+        test_db.add(project)
+        test_db.flush()
+
+        absolute = self._instance(
+            test_db, test_user.id, test_agent_type.id, None, "/home/nick/alpha"
+        )
+        tilde = self._instance(
+            test_db, test_user.id, test_agent_type.id, machine.id, "~/alpha/"
+        )
+        # Same absolute path but a different HOME: the ``~`` link does not
+        # expand to it, so it is a different checkout (the e2e-with-temp-HOME
+        # case). Stays unfiled, exactly as the live matcher would leave it.
+        foreign_home = self._instance(
+            test_db,
+            test_user.id,
+            test_agent_type.id,
+            None,
+            "/home/nick/alpha",
+            home_dir="/tmp/e2e-home",
+        )
+
+        stamped = backfill_project_id_for_directory(
+            test_db,
+            user_id=test_user.id,
+            project_id=project.id,
+            machine_id=machine.id,
+            local_path="~/alpha",
+        )
+        test_db.commit()
+        assert stamped == 2
+        for inst in (absolute, tilde, foreign_home):
+            test_db.refresh(inst)
+        assert absolute.project_id == project.id
+        assert tilde.project_id == project.id
+        assert foreign_home.project_id is None
+
+    def test_backfill_never_steals(self, test_db, test_user, test_agent_type):
+        from shared.database.project_matching import backfill_project_id_for_directory
+
+        machine = _make_machine(test_db, test_user.id)
+        project = Project(user_id=test_user.id, name="alpha")
+        other = Project(user_id=test_user.id, name="other")
+        test_db.add_all([project, other])
+        test_db.flush()
+        taken = self._instance(
+            test_db,
+            test_user.id,
+            test_agent_type.id,
+            None,
+            "~/alpha",
+            project_id=other.id,
+        )
+        assert (
+            backfill_project_id_for_directory(
+                test_db,
+                user_id=test_user.id,
+                project_id=project.id,
+                machine_id=machine.id,
+                local_path="~/alpha",
+            )
+            == 0
+        )
+        test_db.commit()
+        test_db.refresh(taken)
+        assert taken.project_id == other.id
+
+    def test_autocreate_does_not_adopt_earlier_sessions(
+        self, test_db, test_user, test_agent_type
+    ):
+        """Plan rule: auto-create never runs the adoption backfill. Sessions
+        that ran in the folder before the project existed stay unfiled until
+        the user links the directory (the adopt affordance)."""
+        from shared.database.project_matching import (
+            resolve_or_create_project_id_for_session,
+        )
+
+        machine = _make_machine(test_db, test_user.id)
+        legacy = self._instance(
+            test_db, test_user.id, test_agent_type.id, machine.id, "~/habit_rewards"
+        )
+        machineless = self._instance(
+            test_db, test_user.id, test_agent_type.id, None, "~/habit_rewards/lib"
+        )
+
+        pid = resolve_or_create_project_id_for_session(
+            test_db,
+            test_user.id,
+            machine.id,
+            "~/habit_rewards",
+            git_remote_url="git@github.com:x/habit_rewards.git",
+            repo_root="~/habit_rewards",
+            home_dir="/home/nick",
+        )
+        test_db.commit()
+        assert pid is not None
+        for inst in (legacy, machineless):
+            test_db.refresh(inst)
+        assert legacy.project_id is None
+        assert machineless.project_id is None
+
+    def test_delete_then_new_session_does_not_resurrect_history(
+        self, test_db, test_user, test_agent_type
+    ):
+        """Delete must feel deleted: the non-cascading delete unfiles the
+        project's sessions; the next session in that folder auto-creates a
+        same-named project, and the old sessions must NOT follow it."""
+        from backend.db import task_queries
+        from shared.database.project_matching import (
+            resolve_or_create_project_id_for_session,
+        )
+
+        machine = _make_machine(test_db, test_user.id)
+        args = dict(
+            git_remote_url="git@github.com:x/alpha.git",
+            repo_root="~/alpha",
+            home_dir="/home/nick",
+        )
+        first = resolve_or_create_project_id_for_session(
+            test_db, test_user.id, machine.id, "~/alpha", **args
+        )
+        test_db.commit()
+        assert first is not None
+        history = self._instance(
+            test_db,
+            test_user.id,
+            test_agent_type.id,
+            machine.id,
+            "~/alpha",
+            project_id=first,
+        )
+
+        task_queries.delete_project(test_db, test_user.id, first)
+        test_db.commit()
+        test_db.refresh(history)
+        assert history.project_id is None
+
+        second = resolve_or_create_project_id_for_session(
+            test_db, test_user.id, machine.id, "~/alpha", **args
+        )
+        test_db.commit()
+        assert second is not None and second != first
+        test_db.refresh(history)
+        assert history.project_id is None  # still deleted-feeling
+
+
 class TestSharedProjectMatching:
     """A member's session lands on the project shared with them, not on a
     private twin — and never on one they may only view."""
