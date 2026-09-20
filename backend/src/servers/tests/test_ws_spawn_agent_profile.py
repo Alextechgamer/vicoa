@@ -13,7 +13,6 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 import pytest
-from sqlalchemy.orm import sessionmaker
 
 import servers.shared.db.queries as queries_module
 from servers.api import ws_handler
@@ -22,13 +21,16 @@ from shared.database.enums import AgentStatus
 from shared.database.models import AgentInstance, AgentType, User
 from shared.websocket.connection_manager import Connection
 
+# The stamp runs on a worker thread (`asyncio.to_thread`) with its own session,
+# so it must see committed rows — not the test's open transaction.
+pytestmark = pytest.mark.committed_db
+
 
 @pytest.fixture
-def bound_session(test_db, monkeypatch):
-    """Point the query layer's own session factory at the test container."""
-    local = sessionmaker(bind=test_db.get_bind(), autoflush=False, autocommit=False)
-    monkeypatch.setattr(queries_module, "SessionLocal", local)
-    return local
+def bound_session(db_session_factory, monkeypatch):
+    """Point the query layer's own session factory at the test database."""
+    monkeypatch.setattr(queries_module, "SessionLocal", db_session_factory)
+    return db_session_factory
 
 
 @pytest.fixture

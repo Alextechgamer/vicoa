@@ -7,7 +7,6 @@ from unittest.mock import patch, Mock
 import pytest
 from fastapi import BackgroundTasks
 from sqlalchemy import event
-from sqlalchemy.orm import sessionmaker
 
 from backend.auth.dependencies import get_current_user
 from shared.auth.tokens import TokenClaims
@@ -316,10 +315,9 @@ class TestDisplayNameBackfill:
     writing on the auth path itself."""
 
     @pytest.fixture(autouse=True)
-    def _task_uses_test_engine(self, test_db, monkeypatch):
+    def _task_uses_test_db(self, db_session_factory, monkeypatch):
         """The task opens its own `SessionLocal`; point it at the test DB."""
-        local = sessionmaker(bind=test_db.get_bind(), autoflush=False, autocommit=False)
-        monkeypatch.setattr(users_module, "SessionLocal", local)
+        monkeypatch.setattr(users_module, "SessionLocal", db_session_factory)
 
     async def _authenticate(self, test_db, user, display_name):
         background_tasks = BackgroundTasks()

@@ -18,7 +18,6 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import delete as sa_delete
-from sqlalchemy.orm import sessionmaker
 
 from backend.auth.dependencies import (
     get_current_claims,
@@ -633,12 +632,10 @@ class TestPublicSession:
         assert [s["id"] for s in page["items"]] == [str(world.instance.id)]
 
     def test_view_counted_once_per_client_window(
-        self, client, world, token, monkeypatch
+        self, client, world, token, db_session_factory, monkeypatch
     ):
         # The background bump opens its own session; point it at the test DB.
-        monkeypatch.setattr(
-            share_queries, "SessionLocal", sessionmaker(bind=world.db.get_bind())
-        )
+        monkeypatch.setattr(share_queries, "SessionLocal", db_session_factory)
         for _ in range(3):
             assert client.get(f"/api/v1/public/shares/{token}").status_code == 200
         world.db.expire_all()

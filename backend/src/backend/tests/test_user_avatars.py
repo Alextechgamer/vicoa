@@ -23,16 +23,11 @@ def _png_bytes(width: int = 64, height: int = 64, color=(20, 120, 200)) -> bytes
 
 
 @pytest.fixture(autouse=True)
-def _seed_uses_test_engine(test_db, monkeypatch):
-    """Bind the seed's own-session factory to the test container's engine.
-
-    seed_user_avatar() opens ``SessionLocal`` (module-level, bound to the
+def _seed_uses_test_db(db_session_factory, monkeypatch):
+    """seed_user_avatar() opens ``SessionLocal`` (module-level, bound to the
     settings DB) because it runs as a background task; point it at the test DB.
     """
-    from sqlalchemy.orm import sessionmaker
-
-    local = sessionmaker(bind=test_db.get_bind(), autoflush=False, autocommit=False)
-    monkeypatch.setattr(avatars, "SessionLocal", local)
+    monkeypatch.setattr(avatars, "SessionLocal", db_session_factory)
 
 
 @pytest.fixture
