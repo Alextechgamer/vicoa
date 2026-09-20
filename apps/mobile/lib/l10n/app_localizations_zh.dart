@@ -51,7 +51,7 @@ class AppLocalizationsZh extends AppLocalizations {
   String get tasksDisplay => '显示';
 
   @override
-  String get tasksInbox => '收件箱';
+  String get tasksNoProject => '无项目';
 
   @override
   String get tasksLabelsButton => '标签';
@@ -720,7 +720,7 @@ class AppLocalizationsZh extends AppLocalizations {
   String get directoryPickerRecent => '最近';
 
   @override
-  String get directoryPickerWorkingDirectory => '工作目录';
+  String get directoryPickerProject => '项目';
 
   @override
   String get errorStateDisplaySignInAgain => '重新登录';
@@ -1345,7 +1345,7 @@ class AppLocalizationsZh extends AppLocalizations {
       '可能的原因：\n\n• 机器无响应\n• 网络连接问题\n• 目录路径无效\n\n请检查机器状态后重试。';
 
   @override
-  String get newSessionWorkingDirectory => '工作目录';
+  String get newSessionProject => '项目';
 
   @override
   String get newSessionWorktree => '工作树';
