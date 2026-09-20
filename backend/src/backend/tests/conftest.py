@@ -8,12 +8,17 @@ from unittest.mock import Mock
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
 from testcontainers.postgres import PostgresContainer
 
 from shared.config import settings
 from shared.database.models import Base, User, AgentType, AgentInstance
 from shared.database.enums import AgentStatus
+from shared.database.testing import (
+    COMMITTED_DB_MARKER,
+    committed_session,
+    session_factory_for,
+    transactional_session,
+)
 from backend.main import app
 from backend.auth.dependencies import (
     get_current_claims,
@@ -31,25 +36,41 @@ def postgres_container():
         yield postgres
 
 
-@pytest.fixture
-def test_db(postgres_container):
-    """Create a test database session using PostgreSQL."""
-    # Get connection URL from container
-    db_url = postgres_container.get_connection_url()
-
-    # Create engine and tables
-    engine = create_engine(db_url)
+@pytest.fixture(scope="session")
+def test_engine(postgres_container):
+    """One engine, and one `create_all`, for the whole run."""
+    engine = create_engine(postgres_container.get_connection_url())
     Base.metadata.create_all(bind=engine)
-
-    # Create session
-    TestSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    session = TestSessionLocal()
-
-    yield session
-
-    session.close()
-    Base.metadata.drop_all(bind=engine)
+    yield engine
     engine.dispose()
+
+
+@pytest.fixture
+def test_db(request, test_engine):
+    """A database session that leaves nothing behind.
+
+    By default the test runs inside one transaction that is rolled back at the
+    end (commits become savepoints; see `shared.database.testing`). A test that
+    needs real commits — a second connection or a thread must see the rows —
+    opts in with `@pytest.mark.committed_db` and gets its tables truncated
+    afterwards instead.
+    """
+    if request.node.get_closest_marker(COMMITTED_DB_MARKER):
+        with committed_session(test_engine, Base.metadata) as session:
+            yield session
+    else:
+        with transactional_session(test_engine) as session:
+            yield session
+
+
+@pytest.fixture
+def db_session_factory(test_db):
+    """A `SessionLocal` stand-in for code that opens its own session.
+
+    Monkeypatch the module under test's `SessionLocal` with this; sessions it
+    hands out see the same data as `test_db`.
+    """
+    return session_factory_for(test_db)
 
 
 @pytest.fixture

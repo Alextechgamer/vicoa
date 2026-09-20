@@ -77,6 +77,7 @@ pythonpath = [".", "src"]
 # Markers
 markers = [
     "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
+    "committed_db: test_db commits for real (second connection / thread must see the rows) and tables are truncated afterwards",
 ]
 
 # Asyncio support

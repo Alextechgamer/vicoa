@@ -1034,8 +1034,9 @@ class TestPayerResolution:
 
 
 class TestInviteLinkRedemptionIsSerialized:
+    @pytest.mark.committed_db  # the racers are real connections on real threads
     def test_one_use_link_admits_exactly_one_of_two_racing_clients(
-        self, test_db, test_user, monkeypatch
+        self, test_db, test_user, db_session_factory, monkeypatch
     ):
         """Two real sessions, two threads, one `max_uses=1` link.
 
@@ -1044,8 +1045,6 @@ class TestInviteLinkRedemptionIsSerialized:
         """
         import threading
         import time
-
-        from sqlalchemy.orm import sessionmaker
 
         team = collab_queries.create_team(test_db, test_user, name="Race")
         invite = collab_queries.create_invite_link(
@@ -1065,7 +1064,7 @@ class TestInviteLinkRedemptionIsSerialized:
 
         monkeypatch.setattr(collab_queries, "_seat_count", slow_seat_count)
 
-        Session = sessionmaker(bind=test_db.get_bind())
+        Session = db_session_factory
         outcomes: list[str] = []
         guard = threading.Lock()
 
