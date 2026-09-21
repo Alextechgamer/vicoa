@@ -214,6 +214,10 @@ export function describeToolRun(
     count: number;
     files: Set<string>;
     hasFile: boolean;
+    /** Distinct command text, for shell tools — an ACP agent cards a command
+     *  twice, once as it starts and once with its output, and that is still
+     *  one command. */
+    commands: Set<string>;
   }
   const order: ToolAggregate[] = [];
   const byName = new Map<string, ToolAggregate>();
@@ -226,11 +230,12 @@ export function describeToolRun(
     if (options?.excludeFileEdits && isFileEditToolName(summary.name)) continue;
     let aggregate = byName.get(summary.name);
     if (!aggregate) {
-      aggregate = { name: summary.name, count: 0, files: new Set(), hasFile: false };
+      aggregate = { name: summary.name, count: 0, files: new Set(), hasFile: false, commands: new Set() };
       byName.set(summary.name, aggregate);
       order.push(aggregate);
     }
     aggregate.count += 1;
+    aggregate.commands.add(summary.description);
     if (summary.fullPath) {
       aggregate.hasFile = true;
       aggregate.files.add(summary.fullPath);
@@ -242,8 +247,9 @@ export function describeToolRun(
   }
   const segments = order.map((aggregate) => {
     // Shell tools read better as an action than a name; count the commands run.
-    if (aggregate.name === 'Bash' || aggregate.name === 'Exec') {
-      return aggregate.count > 1 ? `Run ${aggregate.count} commands` : 'Run a command';
+    if (isShellToolName(aggregate.name)) {
+      const commands = aggregate.commands.size;
+      return commands > 1 ? `Run ${commands} commands` : 'Run a command';
     }
     // File tools count the distinct files they touched.
     if (aggregate.hasFile) {
@@ -282,6 +288,13 @@ export function toolNamesInRun(contents: string[], agentType: ToolUseAgentType):
     }
   }
   return names;
+}
+
+/** True for the shell tools: Claude's Bash, codex's Exec, and the ACP
+ *  wrapper's Execute (the `execute` kind every ACP agent's shell maps to). */
+export function isShellToolName(name: string): boolean {
+  const normalized = name.toLowerCase().replace(/[^a-z]/g, '');
+  return normalized === 'bash' || normalized === 'exec' || normalized === 'execute';
 }
 
 /** True for the tools that create or modify a file (Edit/Write/MultiEdit,
@@ -353,6 +366,47 @@ export function editedFileFromContent(
     diffStat: summary.diffStat,
     diffContent: parsed.remainingContent,
   };
+}
+
+/** `+N -M` + `+P -Q` → `+(N+P) -(M+Q)`; a side that is unknown is skipped. */
+function addDiffStats(a: string | null, b: string | null): string | null {
+  const parse = (stat: string | null) => {
+    const m = stat ? /^\+(\d+)\s+-(\d+)$/.exec(stat) : null;
+    return m ? { plus: Number(m[1]), minus: Number(m[2]) } : null;
+  };
+  const x = parse(a);
+  const y = parse(b);
+  if (!x) return y ? b : null;
+  if (!y) return a;
+  return `+${x.plus + y.plus} -${x.minus + y.minus}`;
+}
+
+/**
+ * The files a run edited, one entry per file in first-edit order. An agent
+ * usually touches the same file several times in a run (an Edit per hunk, a
+ * Write then a fix-up), and listing every message as its own chip repeated the
+ * file over and over. Repeats fold into the first entry: its tool label stays
+ * (so a chip doesn't flip between "Edit" and "Write" as a live run streams),
+ * the `+N -M` stats add up across the known ones, and the diff bodies are
+ * concatenated so the hover preview shows the whole run's changes to it.
+ */
+export function editedFilesInRun(contents: string[], agentType: ToolUseAgentType): EditedFileSummary[] {
+  const byPath = new Map<string, EditedFileSummary>();
+  for (const content of contents) {
+    const edit = editedFileFromContent(content, agentType);
+    if (!edit) continue;
+    const key = edit.fullPath ?? edit.fileName;
+    const seen = byPath.get(key);
+    if (!seen) {
+      byPath.set(key, edit);
+      continue;
+    }
+    seen.diffStat = addDiffStats(seen.diffStat, edit.diffStat);
+    if (edit.diffContent.trim()) {
+      seen.diffContent = seen.diffContent.trim() ? `${seen.diffContent}\n\n${edit.diffContent}` : edit.diffContent;
+    }
+  }
+  return [...byPath.values()];
 }
 
 export function summarizeToolUse(parsed: ParsedToolUse): ToolUseSummary {
