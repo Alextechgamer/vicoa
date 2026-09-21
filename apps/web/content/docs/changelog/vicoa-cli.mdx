@@ -5,6 +5,13 @@ description: Release notes for the Vicoa CLI and daemon — new agent support, b
 
 # Vicoa CLI
 
+### v1.9.3
+21 September, 2026
+- `vicoa session update <id> --worktree <branch>` re-files a session under another checkout of its repo — the worktree that has `<branch>` checked out, or the main checkout's own branch to move it back; the running agent stays where it is, only where the session is listed and where it next resumes changes. A session started in a subfolder lands in the same subfolder of the target
+- Deleting a worktree now returns in well under a second — the daemon moves it to a trash folder beside the worktrees and reclaims the files in the background, finishing any leftovers when it next starts; an un-forced delete still refuses a dirty tree or submodules the way git does
+- OpenCode and other ACP agents' file edits now show as one card with the path and diff, like Claude Code's, instead of a bare "Edit" card followed by one named after the file; a shell command is carded as soon as it is named, before it finishes
+- Fix search failing with "Search failed" for any query that matched a task under "No project" (web and mobile)
+
 ### v1.9.2
 20 September, 2026
 - Worktree setup runs on the daemon, so a repo's committed setup commands run whichever device started the session; `vicoa worktree setup [PATH]` runs it from a terminal (`--dry-run`, `--trust`, `--force`)
