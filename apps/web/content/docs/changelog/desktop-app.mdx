@@ -5,6 +5,18 @@ description: Release notes for the Vicoa desktop app (macOS, Windows) — new fe
 
 # Desktop App
 
+### v0.1.29
+21 September, 2026
+- Bundle Vicoa CLI daemon [v1.9.3](/docs/changelog/vicoa-cli#v193)
+- Project settings live in one place — Settings → your project has General (display, linked folders per machine, archive and delete), Git & Worktree (setup hooks, with a machine picker when several are linked) and Tasks (the task key prefix, settable before the first task); the Tasks page gear now takes you there
+- Labels get their own Settings → Tasks tab — one vocabulary across all your projects
+- Settings lists every project, including ones without a session, with archived projects under a collapsed group so Unarchive and Delete stay reachable
+- Delete worktree no longer makes you wait — the dialog closes on Confirm, the worktree's sessions are archived together and their terminals closed, and a failure reopens the dialog with the error and a Retry button
+- Collapsed tool runs and sub-agents show one chip per edited file — name only, full path on hover, wrapping whole rather than clipping — and clicking a chip opens the file in the Files panel; up to 8 before "+N more"
+- OpenCode edits and commands are carded like Claude Code's, with the path and diff on one card
+- A session moved with `vicoa session update --worktree` jumps to its new sidebar group immediately, no reload needed
+- Fix search showing "Search failed" for any query that matched a task under "No project"
+
 ### v0.1.28
 20 September, 2026
 - Bundle Vicoa CLI daemon [v1.9.2](/docs/changelog/vicoa-cli#v192)
