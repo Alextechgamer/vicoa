@@ -11,6 +11,7 @@ import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '/flutter_flow/flutter_flow_util.dart';
 import '/custom_code/utils/ansi_text.dart';
+import '/custom_code/utils/edited_files.dart';
 import '/custom_code/utils/markdown_diff_utils.dart';
 import '/custom_code/widgets/syntax_highlighted_code_block.dart';
 import '/custom_code/widgets/tool_icon.dart';
@@ -26,6 +27,7 @@ Widget buildMarkdownText(
   String? agentTypeName,
   bool toolUseIsFirst = true,
   bool toolUseIsLast = true,
+  void Function(String path, String name)? onOpenFile,
 }) {
   // debugPrint('buildMarkdownText: $content');
   final textStyle = FlutterFlowTheme.of(context).bodyMedium.override(
@@ -68,7 +70,7 @@ Widget buildMarkdownText(
   if (filteredContent.trim().startsWith('Using tool:') || filteredContent.trim().startsWith('🔧 Using tool:') ||
       filteredContent.trim().startsWith('**Exec:**') ||
       (filteredContent.contains('✏️ Applying patch to') && filteredContent.contains('file (+'))) {
-    return _buildUsingToolMessage(context, filteredContent, agentTypeName: agentTypeName, toolUseIsFirst: toolUseIsFirst, toolUseIsLast: toolUseIsLast);
+    return _buildUsingToolMessage(context, filteredContent, agentTypeName: agentTypeName, toolUseIsFirst: toolUseIsFirst, toolUseIsLast: toolUseIsLast, onOpenFile: onOpenFile);
   }
 
   final children = <Widget>[];
@@ -1827,10 +1829,23 @@ Widget _toolBorderedBox(
   );
 }
 
+/// The bold, primary-coloured style of a tool group header's label.
+TextStyle toolGroupHeaderLabelStyle(BuildContext context) =>
+    FlutterFlowTheme.of(context).bodyMedium.override(
+          fontWeight: FontWeight.bold,
+          color: FlutterFlowTheme.of(context).primaryText,
+          fontSize: 15.0,
+        );
+
 /// Header row for a collapsed run of tool uses — a bordered box (styled like a
 /// tool row) showing the run's aggregate [label] and a chevron. Tapping toggles
 /// the whole run. Top-rounded; bottom-rounded only when [isLast] (i.e.
 /// collapsed, with no rows beneath it).
+///
+/// [body] replaces the label — the run's edited files flowing after it
+/// (`EditedFilesFlow`), which may wrap; the icon and chevron then stay pinned
+/// to the first line. Taps inside it win over the header's toggle; anything
+/// in it without one falls through to the toggle.
 Widget buildToolGroupHeader(
   BuildContext context,
   String label, {
@@ -1839,7 +1854,15 @@ Widget buildToolGroupHeader(
   required VoidCallback onToggle,
   String? iconToolName,
   String? agentTypeName,
+  Widget? body,
 }) {
+  final wraps = body != null;
+  final content = body ??
+      Text.rich(
+        TextSpan(text: label, style: toolGroupHeaderLabelStyle(context)),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      );
   return GestureDetector(
     behavior: HitTestBehavior.opaque,
     onTap: () {
@@ -1851,34 +1874,60 @@ Widget buildToolGroupHeader(
       isFirst: true,
       isLast: isLast,
       child: Row(
+        crossAxisAlignment: wraps ? CrossAxisAlignment.start : CrossAxisAlignment.center,
         children: [
           if (iconToolName != null && iconToolName.isNotEmpty) ...[
-            ToolIcon(toolName: iconToolName, agentTypeName: agentTypeName),
+            Padding(
+              padding: EdgeInsets.only(top: wraps ? 2.0 : 0.0),
+              child: ToolIcon(toolName: iconToolName, agentTypeName: agentTypeName),
+            ),
             const SizedBox(width: 8.0),
           ],
-          Expanded(
-            child: Text.rich(
-              TextSpan(
-                text: label,
-                style: FlutterFlowTheme.of(context).bodyMedium.override(
-                      fontWeight: FontWeight.bold,
-                      color: FlutterFlowTheme.of(context).primaryText,
-                      fontSize: 15.0,
-                    ),
-              ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
+          Expanded(child: content),
           const SizedBox(width: 6.0),
-          _toolChevron(context, expanded),
+          Padding(
+            padding: EdgeInsets.only(top: wraps ? 2.0 : 0.0),
+            child: _toolChevron(context, expanded),
+          ),
         ],
       ),
     ),
   );
 }
 
-Widget _buildUsingToolMessage(BuildContext context, String content, {String? agentTypeName, bool toolUseIsFirst = true, bool toolUseIsLast = true, bool collapsible = false, bool expanded = false, VoidCallback? onToggle}) {
+/// A tool row's description when it names one file — a lone backticked
+/// token (no spaces), with the trailing `+N -M` a Codex patch card reports
+/// split off. Null for anything else (a command, a sentence), which renders
+/// through the markdown inline formatting as before.
+({String display, DiffStat? reportedStat})? _lonePathDescription(String inlineDesc) {
+  final m = RegExp(r'^`([^`\s]+)`(?:\s+(\+\d+\s+-\d+))?\s*$').firstMatch(inlineDesc.trim());
+  if (m == null) return null;
+  return (display: m.group(1)!, reportedStat: parseDiffStat(m.group(2)));
+}
+
+/// A `+N -M` to follow a file name — on a tool row or an edited-file item on
+/// a run header — as text spans, each part led by a space. Body font at the
+/// name's [fontSize], green and red, a zero side left out.
+List<InlineSpan> toolDiffStatSpans(BuildContext context, DiffStat stat, {double fontSize = 14.0}) {
+  final theme = FlutterFlowTheme.of(context);
+  final style = theme.bodyMedium.override(fontSize: fontSize);
+  return [
+    if (stat.additions > 0) TextSpan(text: ' +${stat.additions}', style: style.copyWith(color: theme.success)),
+    if (stat.deletions > 0) TextSpan(text: ' -${stat.deletions}', style: style.copyWith(color: theme.error)),
+  ];
+}
+
+/// [toolDiffStatSpans] as a widget, for where the stat sits beside a text
+/// rather than inside it (its leading space dropped).
+Widget buildToolDiffStat(BuildContext context, DiffStat stat, {double fontSize = 14.0}) {
+  final spans = toolDiffStatSpans(context, stat, fontSize: fontSize);
+  return Text.rich(TextSpan(children: [
+    for (var i = 0; i < spans.length; i++)
+      i == 0 ? TextSpan(text: (spans[i] as TextSpan).text!.trimLeft(), style: spans[i].style) : spans[i],
+  ]));
+}
+
+Widget _buildUsingToolMessage(BuildContext context, String content, {String? agentTypeName, bool toolUseIsFirst = true, bool toolUseIsLast = true, bool collapsible = false, bool expanded = false, VoidCallback? onToggle, void Function(String path, String name)? onOpenFile}) {
   final toolFormat = _formatToolPattern(content);
   final toolName = toolFormat.toolName;
   final inlineDesc = toolFormat.isMultilineDescription ? null : toolFormat.toolDescription;
@@ -1886,8 +1935,10 @@ Widget _buildUsingToolMessage(BuildContext context, String content, {String? age
       ? _stripWrappingBackticks(toolFormat.toolDescription)
       : null;
 
-  // Build the header line (bold tool name + inline description).
+  // Build the header line (bold tool name + inline description). An edit's
+  // `+N -M` is not part of the text: it rides at the end of the row.
   final List<InlineSpan> firstLineSpans = [];
+  DiffStat? trailingStat;
   if (toolName.isNotEmpty) {
     // Add bold tool name
     firstLineSpans.add(
@@ -1930,7 +1981,36 @@ Widget _buildUsingToolMessage(BuildContext context, String content, {String? age
           color: FlutterFlowTheme.of(context).primary,
           decoration: TextDecoration.underline,
         );
-        _parseLineFormatting(context, inlineDesc, textStyle, codeStyle, linkStyle, descriptionSpans);
+        final lonePath = _lonePathDescription(inlineDesc);
+        if (lonePath != null) {
+          // A file path reads in the body font, not code style — like an
+          // edited file's item on a run header. For an edit it is a
+          // tap that opens the file in the viewer when the path resolves
+          // inside the project, coloured like a link; its `+N -M` moves to
+          // the end of the row. A TextSpan (not a WidgetSpan) so the header
+          // still measures for the single-line ellipsis below; the
+          // recognizer wins over the row's toggle since it sits deeper in
+          // the hit-test path.
+          final isEdit = isFileEditToolName(toolName);
+          final relative = isEdit && onOpenFile != null ? workspaceRelativePath(lonePath.display) : null;
+          descriptionSpans.add(TextSpan(
+            text: lonePath.display,
+            style: relative == null ? textStyle : textStyle.copyWith(color: FlutterFlowTheme.of(context).primary),
+            mouseCursor: relative == null ? null : SystemMouseCursors.click,
+            recognizer: relative == null
+                ? null
+                : (TapGestureRecognizer()
+                  ..onTap = () {
+                    HapticFeedback.lightImpact();
+                    onOpenFile!(relative, relative.split('/').last);
+                  }),
+          ));
+          if (isEdit) {
+            trailingStat = lonePath.reportedStat ?? diffStatFromContent(toolFormat.remainingContent);
+          }
+        } else {
+          _parseLineFormatting(context, inlineDesc, textStyle, codeStyle, linkStyle, descriptionSpans);
+        }
         firstLineSpans.addAll(descriptionSpans);
       }
     }
@@ -1997,14 +2077,29 @@ Widget _buildUsingToolMessage(BuildContext context, String content, {String? age
     final showChevron = collapsible && expandable;
     final truncate = collapsible && !expanded && headerOverflows;
 
+    final stat = trailingStat;
+    // The `+N -M` follows the path directly. In full (not truncated) it is
+    // part of the text, so it trails the path wherever that wraps to; on a
+    // one-line ellipsized header it sits beside the text instead, so the
+    // path gives way to the ellipsis before the stat does.
+    final statInline = stat != null && !truncate;
     final text = Text.rich(
-      headerSpan,
+      statInline ? TextSpan(children: [headerSpan, ...toolDiffStatSpans(context, stat)]) : headerSpan,
       maxLines: truncate ? 1 : null,
       overflow: truncate ? TextOverflow.ellipsis : TextOverflow.clip,
     );
 
     final showIcon = toolName.isNotEmpty;
-    Widget row = (showIcon || showChevron)
+    final Widget body = stat == null || statInline
+        ? text
+        : Row(
+            children: [
+              Flexible(child: text),
+              const SizedBox(width: 6.0),
+              buildToolDiffStat(context, stat),
+            ],
+          );
+    Widget row = (showIcon || showChevron || stat != null)
         // Pin the icon/chevron to the first line. Centering (the Row default)
         // drifts them to the middle of the block once an expanded header
         // wraps to several lines; they should stay where they sat collapsed.
@@ -2018,14 +2113,14 @@ Widget _buildUsingToolMessage(BuildContext context, String content, {String? age
                 ),
                 const SizedBox(width: 8.0),
               ],
-              Expanded(child: text),
+              Expanded(child: body),
               if (showChevron) ...[
                 const SizedBox(width: 6.0),
                 _toolChevron(context, expanded),
               ],
             ],
           )
-        : text;
+        : body;
     if (showChevron && onToggle != null) {
       row = GestureDetector(
         behavior: HitTestBehavior.opaque,
@@ -2048,14 +2143,17 @@ Widget _buildUsingToolMessage(BuildContext context, String content, {String? age
     headerRow = LayoutBuilder(
       builder: (context, constraints) {
         const chevronReserve = 24.0; // chevron + gap
+        const iconReserve = 23.0; // tool icon + gap
+        const statReserve = 60.0; // "+NN -MM" and its lead-in
+        final reserve = chevronReserve +
+            (toolName.isNotEmpty ? iconReserve : 0.0) +
+            (trailingStat != null ? statReserve : 0.0);
         final painter = TextPainter(
           text: headerSpan,
           maxLines: 1,
           textDirection: Directionality.of(context),
           textScaler: MediaQuery.textScalerOf(context),
-        )..layout(
-            maxWidth:
-                (constraints.maxWidth - chevronReserve).clamp(0.0, double.infinity));
+        )..layout(maxWidth: (constraints.maxWidth - reserve).clamp(0.0, double.infinity));
         final overflows = painter.didExceedMaxLines;
         painter.dispose();
         return buildHeaderRow(headerOverflows: overflows);
@@ -2180,7 +2278,8 @@ String sanitizeToolContent(
 /// (output/code/todos) collapsed behind a right-chevron in the header row. A
 /// header too long for one line is ellipsized and expands the same way, so pass
 /// [onToggle] unconditionally — the row decides whether it's expandable.
-/// [content] must already be sanitized (see [sanitizeToolContent]).
+/// [content] must already be sanitized (see [sanitizeToolContent]). With
+/// [onOpenFile], an edit row's path is a tap that opens the file.
 Widget buildCollapsibleToolRow(
   BuildContext context,
   String content, {
@@ -2189,6 +2288,7 @@ Widget buildCollapsibleToolRow(
   bool toolUseIsLast = true,
   bool expanded = false,
   VoidCallback? onToggle,
+  void Function(String path, String name)? onOpenFile,
 }) =>
     _buildUsingToolMessage(
       context,
@@ -2199,6 +2299,7 @@ Widget buildCollapsibleToolRow(
       collapsible: true,
       expanded: expanded,
       onToggle: onToggle,
+      onOpenFile: onOpenFile,
     );
 
 /// Returns true when [content] (trimmed) is exactly one fenced code block.

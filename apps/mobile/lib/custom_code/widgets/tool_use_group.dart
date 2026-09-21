@@ -4,15 +4,31 @@
 // each tool row with output beyond its header carries its own chevron to expand
 // that output. A standalone tool renders as its bordered row with a chevron for
 // its detail. Gated by the `collapseToolUse` appearance setting.
+//
+// The files a run edited flow in its header — one item per file, first-edit
+// order, file glyph + basename + `+N -M` — and an item is a tap that opens
+// the file in the viewer (`FileViewerWidget`) when the host can (see
+// [ToolUseGroup.onOpenFile]). Mirrors the web dashboard's `ToolRunSummary`,
+// with the file glyph separating items where the web draws a pill.
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import '/custom_code/actions/file_icon.dart' show fileIconFor;
+import '/custom_code/utils/edited_files.dart';
 import '/custom_code/widgets/markdown_text_builder.dart'
     show
         parseToolMessage,
         sanitizeToolContent,
         buildCollapsibleToolRow,
-        buildToolGroupHeader;
+        buildToolDiffStat,
+        buildToolGroupHeader,
+        toolGroupHeaderLabelStyle;
 import '/custom_code/widgets/tool_icon.dart' show representativeToolName;
+import '/flutter_flow/flutter_flow_theme.dart';
+
+/// Opens a file in the viewer: [path] relative to the session's working
+/// directory (the shape `FileViewerWidget` takes), [name] its basename.
+typedef OpenFileCallback = void Function(String path, String name);
 
 /// Compact summary of one tool-use message, used to build a run's aggregate
 /// label (["Run 2 commands, edit 2 files"]).
@@ -22,12 +38,17 @@ class ToolUseSummary {
     required this.description,
     required this.hasDetail,
     this.fileName,
+    this.diffStat,
   });
 
   final String name; // display name, e.g. Edit / Bash / Todos / Edited
   final String description; // backticks stripped, single line (command or path)
   final String? fileName; // basename when the description is a lone path
   final bool hasDetail; // trailing code / output or a multi-line description
+
+  /// `+N -M` when known — reported on the tool line (Codex) or derived from
+  /// the card's fenced diff (Claude) — else null.
+  final DiffStat? diffStat;
 
   bool get isShell => name == 'Bash' || name == 'Exec';
   bool get isFile => fileName != null && fileName!.isNotEmpty;
@@ -57,9 +78,15 @@ ToolUseSummary summarizeToolMessage(String content) {
   final f = parseToolMessage(content);
   var desc = f.toolDescription.trim();
 
-  // Drop a trailing "+N -M" diff stat so a lone path parses to a clean file.
+  // Drop a trailing "+N -M" diff stat so a lone path parses to a clean file;
+  // keep it for the header. Not reported (Claude) → derive it from the diff.
   final diffMatch = RegExp(r'(\+\d+\s+-\d+)\s*$').firstMatch(desc);
-  if (diffMatch != null) desc = desc.substring(0, diffMatch.start).trim();
+  DiffStat? diffStat;
+  if (diffMatch != null) {
+    diffStat = parseDiffStat(diffMatch.group(1));
+    desc = desc.substring(0, diffMatch.start).trim();
+  }
+  diffStat ??= diffStatFromContent(f.remainingContent);
 
   final stripped = _stripBackticks(desc);
   String? fileName;
@@ -78,6 +105,7 @@ ToolUseSummary summarizeToolMessage(String content) {
     description: stripped,
     fileName: fileName,
     hasDetail: hasDetail,
+    diffStat: diffStat,
   );
 }
 
@@ -187,6 +215,196 @@ String describeToolRun(List<ToolUseSummary> tools) {
   return joined[0].toUpperCase() + joined.substring(1);
 }
 
+/// One file a run edited, for its item on the run header.
+class EditedFile {
+  const EditedFile({
+    required this.toolName,
+    required this.fileName,
+    required this.path,
+    this.diffStat,
+  });
+
+  /// The editing tool's display name — Edit / Write / MultiEdit / Edited.
+  final String toolName;
+
+  /// Basename, what the item shows.
+  final String fileName;
+
+  /// The path as it appears in the tool row: relative to the session's
+  /// working directory once the project root has been stripped, still rooted
+  /// when the file lies outside the project. See [workspaceRelativePath].
+  final String path;
+
+  /// Summed `+N -M` across the run's edits to this file, when any is known.
+  final DiffStat? diffStat;
+}
+
+/// The files a run edited, one entry per file in first-edit order. An agent
+/// usually touches the same file several times in a run (an Edit per hunk, a
+/// Write then a fix-up), and listing every message as its own entry repeated
+/// the file over and over. Repeats fold into the first entry: its tool label
+/// stays (so an entry doesn't flip between "Edit" and "Write" as a live run
+/// streams) and the known `+N -M` stats add up.
+List<EditedFile> editedFilesInRun(List<ToolUseSummary> tools) {
+  final byPath = <String, EditedFile>{};
+  for (final t in tools) {
+    if (!isFileEditToolName(t.name) || !t.isFile) continue;
+    final seen = byPath[t.description];
+    if (seen == null) {
+      byPath[t.description] = EditedFile(
+        toolName: t.name,
+        fileName: t.fileName!,
+        path: t.description,
+        diffStat: t.diffStat,
+      );
+      continue;
+    }
+    final stat = t.diffStat;
+    if (stat == null) continue;
+    byPath[t.description] = EditedFile(
+      toolName: seen.toolName,
+      fileName: seen.fileName,
+      path: seen.path,
+      diffStat: seen.diffStat == null ? stat : seen.diffStat! + stat,
+    );
+  }
+  return byPath.values.toList();
+}
+
+/// Files shown at first; the rest fold into "+N more".
+const int kMaxInlineFiles = 6;
+
+/// A collapsed run's header line with its edited files flowing in it: the
+/// run label as ever ("Run a command, edit 2 files") and then one item per
+/// file — the Files tree's file-type glyph, small and in the tool icon's
+/// neutral colour, the basename, and its `+N -M` right behind — all in the
+/// body font. The icon is what separates one file from the next; no pills,
+/// the header already sits in a bordered box. An item is one unbreakable
+/// unit: everything shares a line while it fits, and an item that doesn't
+/// fit moves whole to the next line (`Wrap`). An item is a tap that opens
+/// the file when [onOpenFile] can (the path resolves inside the project) and
+/// its name is link-coloured then; otherwise a tap falls through to the
+/// header's toggle. Beyond [kMaxInlineFiles] the rest fold into "+N more",
+/// whose tap reveals them in place — it only unfolds the names, never the
+/// run. Mirrors the web dashboard's `ToolRunSummary`.
+class EditedFilesFlow extends StatefulWidget {
+  const EditedFilesFlow({
+    super.key,
+    required this.label,
+    required this.files,
+    this.onOpenFile,
+  });
+
+  /// The run label (`describeToolRun`), unchanged by the items after it.
+  final String label;
+  final List<EditedFile> files;
+  final OpenFileCallback? onOpenFile;
+
+  @override
+  State<EditedFilesFlow> createState() => _EditedFilesFlowState();
+}
+
+class _EditedFilesFlowState extends State<EditedFilesFlow> {
+  bool _showAll = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = FlutterFlowTheme.of(context);
+    final files = widget.files;
+    final shown = _showAll ? files : files.take(kMaxInlineFiles).toList();
+    final overflow = files.length - shown.length;
+    return Wrap(
+      spacing: 10.0,
+      runSpacing: 4.0,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        if (widget.label.isNotEmpty) Text(widget.label, style: toolGroupHeaderLabelStyle(context)),
+        for (final file in shown)
+          _EditedFileItem(
+            file: file,
+            relative: widget.onOpenFile == null ? null : workspaceRelativePath(file.path),
+            onOpenFile: widget.onOpenFile,
+          ),
+        if (overflow > 0)
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () {
+              HapticFeedback.selectionClick();
+              setState(() => _showAll = true);
+            },
+            child: Text(
+              '+$overflow more',
+              style: theme.bodyMedium.override(
+                fontSize: 14.0,
+                color: theme.secondaryText.withValues(alpha: 0.7),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _EditedFileItem extends StatelessWidget {
+  const _EditedFileItem({
+    required this.file,
+    required this.relative,
+    required this.onOpenFile,
+  });
+
+  final EditedFile file;
+
+  /// The path to open, or null when the item is inert.
+  final String? relative;
+  final OpenFileCallback? onOpenFile;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = FlutterFlowTheme.of(context);
+    final tappable = relative != null && onOpenFile != null;
+    final iconInfo = fileIconFor(file.fileName);
+    final stat = file.diffStat;
+    // The name reads at the header label's size; only the glyph is small.
+    const fontSize = 15.0;
+    final textStyle = theme.bodyMedium.override(fontSize: fontSize, color: theme.primaryText);
+    final item = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(
+          iconInfo.icon,
+          // A notch smaller than the tool icon (15) — it marks a file, not a
+          // row. FontAwesome glyphs render heavier than Material at the same
+          // size; trim a little so they sit even (as the Files tree does).
+          size: iconInfo.icon.fontPackage == 'font_awesome_flutter' ? 12.0 : 14.0,
+          color: theme.secondaryText.withValues(alpha: 0.7),
+        ),
+        const SizedBox(width: 4.0),
+        Flexible(
+          child: Text(
+            file.fileName,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: tappable ? textStyle.copyWith(color: theme.primary) : textStyle,
+          ),
+        ),
+        if (stat != null) ...[
+          const SizedBox(width: 5.0),
+          buildToolDiffStat(context, stat, fontSize: fontSize),
+        ],
+      ],
+    );
+    if (!tappable) return item;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () {
+        HapticFeedback.lightImpact();
+        onOpenFile!(relative!, file.fileName);
+      },
+      child: item,
+    );
+  }
+}
+
 /// A run of consecutive tool uses. A single tool renders as one bordered row
 /// (its detail collapsed behind a chevron); a multi-tool run renders a bordered
 /// summary header that, when expanded, reveals the border-joined tool rows —
@@ -202,6 +420,7 @@ class ToolUseGroup extends StatefulWidget {
     this.onBeforeToggle,
     this.agentTypeName,
     this.filterProjectRoot,
+    this.onOpenFile,
   });
 
   /// Sanitized tool-use message contents, in chat order.
@@ -215,6 +434,12 @@ class ToolUseGroup extends StatefulWidget {
   final VoidCallback? onBeforeToggle;
   final String? agentTypeName;
   final String Function(String content)? filterProjectRoot;
+
+  /// Opens an edited file in the viewer — tapped on a file item in the
+  /// header or on the path of an expanded edit row. Null when the host has
+  /// nowhere to open it (a legacy session with no machine), which leaves
+  /// them plain.
+  final OpenFileCallback? onOpenFile;
 
   @override
   State<ToolUseGroup> createState() => _ToolUseGroupState();
@@ -261,11 +486,17 @@ class _ToolUseGroupState extends State<ToolUseGroup> {
         toolUseIsLast: true,
         expanded: widget.expanded,
         onToggle: _toggleRun,
+        onOpenFile: widget.onOpenFile,
       );
     }
 
     final summaries = [for (final c in contents) summarizeToolMessage(c)];
     final label = describeToolRun(summaries);
+    // The files behind "edit 2 files" follow the label as items.
+    final editedFiles = editedFilesInRun(summaries);
+    final filesFlow = editedFiles.isEmpty
+        ? null
+        : EditedFilesFlow(label: label, files: editedFiles, onOpenFile: widget.onOpenFile);
     final iconToolName =
         representativeToolName([for (final s in summaries) s.name]);
 
@@ -279,6 +510,7 @@ class _ToolUseGroupState extends State<ToolUseGroup> {
         onToggle: _toggleRun,
         iconToolName: iconToolName,
         agentTypeName: widget.agentTypeName,
+        body: filesFlow,
       );
     }
 
@@ -294,6 +526,7 @@ class _ToolUseGroupState extends State<ToolUseGroup> {
           onToggle: _toggleRun,
           iconToolName: iconToolName,
           agentTypeName: widget.agentTypeName,
+          body: filesFlow,
         ),
         for (int i = 0; i < contents.length; i++)
           buildCollapsibleToolRow(
@@ -304,6 +537,7 @@ class _ToolUseGroupState extends State<ToolUseGroup> {
             toolUseIsLast: i == contents.length - 1,
             expanded: _expandedChildren.contains(i),
             onToggle: () => _toggleChild(i),
+            onOpenFile: widget.onOpenFile,
           ),
       ],
     );
