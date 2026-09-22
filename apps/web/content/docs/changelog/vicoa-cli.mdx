@@ -5,6 +5,16 @@ description: Release notes for the Vicoa CLI and daemon — new agent support, b
 
 # Vicoa CLI
 
+### v1.9.4
+22 September, 2026
+- `vicoa project ls|get` and `vicoa label ls|create` — your projects and your label vocabulary are finally readable from the terminal, with open-task counts and the same colours the app picks
+- `--project` takes a key (`VIC`), a name, or `none` for No project, not just a UUID — on `task ls|create|update` and `agent add`; an ambiguous name lists the candidates instead of guessing, and `task ls` now shows a PROJECT column
+- Filter and edit labels from the CLI: `task ls --label` (repeatable, matching all of them), and `--label` / `--add-label` / `--remove-label` on create and update
+- `task update` takes several tasks at once, so a bulk move or re-label is one command instead of a shell loop — a ref that fails is reported and the rest still run, and a task that moved projects prints its new identifier (VIC-20 becomes VIC2-2)
+- `vicoa session share [ID]` prints just the URL, ready to paste into a `gh pr` command — it defaults to the session it is running in and reuses an equivalent live link unless you pass `--new`; `vicoa session unshare --link|--all` revokes
+- `vicoa session ls --since WHEN --until WHEN` asks for the sessions started in a window — a date, a datetime, `today`/`yesterday`, or an age like `30m`/`24h`/`7d` — and `--offset` pages past the first 100
+- Fix a share link that opted into showing your name drawing an initials disc instead of your picture, and every other face on a shared board — assignees, comment authors and reactors — doing the same
+
 ### v1.9.3
 21 September, 2026
 - `vicoa session update <id> --worktree <branch>` re-files a session under another checkout of its repo — the worktree that has `<branch>` checked out, or the main checkout's own branch to move it back; the running agent stays where it is, only where the session is listed and where it next resumes changes. A session started in a subfolder lands in the same subfolder of the target
