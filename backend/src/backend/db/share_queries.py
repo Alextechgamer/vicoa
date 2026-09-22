@@ -396,9 +396,14 @@ def update_share_link(
     link = db.get(ShareLink, link_id)
     if link is None or link.revoked_at is not None:
         raise ShareTargetNotFoundError("Share link not found")
-    stored_scopes = list(link.scopes or [])
-    wanted_scopes = (
-        list(request.scopes) if request.scopes is not None else stored_scopes
+    # Annotated as plain `str` on purpose: the request's scopes are a Literal
+    # type and `list` is invariant, so the two branches only share a type if
+    # the strings are widened here rather than at the call below.
+    stored_scopes: list[str] = list(link.scopes or [])
+    wanted_scopes: list[str] = (
+        [str(scope) for scope in request.scopes]
+        if request.scopes is not None
+        else stored_scopes
     )
     try:
         _require_target_admin(
