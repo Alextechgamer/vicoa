@@ -416,7 +416,7 @@ class _ShareSessionSheetWidgetState extends State<ShareSessionSheetWidget> with 
             theme,
             icon: Icons.error_outline_rounded,
             label: l10n.shareLinkLoadFailed,
-            subtitle: l10n.shareLinkRetry,
+            subtitle: l10n.commonRetry,
             onTap: () async {
               safeSetState(() => _model.loadFailed = false);
               await _load();
@@ -442,10 +442,8 @@ class _ShareSessionSheetWidgetState extends State<ShareSessionSheetWidget> with 
                 ),
                 const SizedBox(width: 12.0),
                 Text(
-                  l10n.shareLinkDescription,
+                  l10n.commonLoading,
                   style: theme.bodySmall.override(font: GoogleFonts.sourceSans3(), color: theme.secondaryText, letterSpacing: 0.0),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
                 ),
               ],
             ),

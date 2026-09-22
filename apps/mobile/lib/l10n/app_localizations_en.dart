@@ -2054,9 +2054,6 @@ class AppLocalizationsEn extends AppLocalizations {
   String get shareLinkPreview => 'Preview as a visitor';
 
   @override
-  String get shareLinkRetry => 'Try again';
-
-  @override
   String get shareLinkRevoke => 'Revoke link';
 
   @override

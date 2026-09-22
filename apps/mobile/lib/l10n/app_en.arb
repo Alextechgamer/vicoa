@@ -921,7 +921,6 @@
     }
   },
   "shareLinkPreview": "Preview as a visitor",
-  "shareLinkRetry": "Try again",
   "shareLinkRevoke": "Revoke link",
   "shareLinkRevokeContent": "Anyone who already has the link loses access.",
   "shareLinkRevokeFailed": "Couldn't revoke the link",
