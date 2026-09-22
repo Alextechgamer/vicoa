@@ -414,6 +414,242 @@ class TestOwnerApi:
         _as(client, world.owner)
         assert client.get("/api/v1/shares").status_code == 400
 
+    def test_revoking_a_project_link_needs_admin_on_the_project(self, client, world):
+        """A link id is not a capability: only someone with standing on the
+        target may kill the link. `_require_target_admin` takes no scopes here,
+        and with an empty scope list its loop used to be the *only* check a
+        project target got — leaving a primary-key lookup that answers for
+        every project there is."""
+        _as(client, world.owner)
+        link = _mint(
+            client,
+            {
+                "kind": "project",
+                "scopes": ["tasks"],
+                "project_id": str(world.project.id),
+            },
+        )
+        stranger = _user(world.db, "x@example.com", "X")
+        world.db.commit()
+        _as(client, stranger)
+        assert client.delete(f"/api/v1/shares/{link['id']}").status_code == 404
+        _as(client, None)
+        assert client.get(f"/api/v1/public/shares/{link['token']}").status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Editing a link in place (PATCH): the token survives
+# ---------------------------------------------------------------------------
+
+
+class TestUpdateApi:
+    def _session_link(self, client, world, **extra) -> dict:
+        _as(client, world.owner)
+        return _mint(
+            client,
+            {"kind": "session", "agent_instance_id": str(world.instance.id), **extra},
+        )
+
+    def _project_link(self, client, world, **extra) -> dict:
+        _as(client, world.owner)
+        body = {
+            "kind": "project",
+            "scopes": ["tasks"],
+            "project_id": str(world.project.id),
+            **extra,
+        }
+        return _mint(client, body)
+
+    def _patch(self, client, link_id: str, body: dict):
+        return client.patch(f"/api/v1/shares/{link_id}", json=body)
+
+    def test_editing_keeps_the_token(self, client, world):
+        """The whole point: a URL already sent out keeps working, and keeps
+        pointing at the same session, with the new settings applied."""
+        link = self._session_link(client, world)
+        response = self._patch(
+            client,
+            link["id"],
+            {"audience": "authenticated", "show_owner": True, "show_branch": True},
+        )
+        assert response.status_code == 200, response.text
+        updated = response.json()
+        assert updated["id"] == link["id"]
+        assert updated["token"] == link["token"]
+        assert updated["agent_instance_id"] == link["agent_instance_id"]
+        assert updated["audience"] == "authenticated"
+        assert updated["show_owner"] is True
+        assert updated["show_branch"] is True
+
+        # The edit reaches the public surface through the same URL.
+        _as(client, None)
+        assert client.get(f"/api/v1/public/shares/{link['token']}").json() == NOT_FOUND
+        visitor = _user(world.db, "v@example.com", "Visitor")
+        world.db.commit()
+        _as(client, visitor)
+        page = client.get(f"/api/v1/public/shares/{link['token']}")
+        assert page.status_code == 200
+        assert page.json()["owner"]["name"] == "Test User"
+
+    def test_omitted_fields_are_left_alone(self, client, world):
+        link = self._session_link(client, world, show_owner=True, expires_in_days=30)
+        updated = self._patch(client, link["id"], {"audience": "authenticated"}).json()
+        assert updated["show_owner"] is True
+        assert updated["expires_at"] == link["expires_at"]
+        assert updated["audience"] == "authenticated"
+
+    def test_expiry_is_set_cleared_and_kept(self, client, world):
+        """`expires_in_days` carries a meaningful null — "never expires" — so
+        an explicit null and an omission must not mean the same thing."""
+        link = self._session_link(client, world)
+        assert link["expires_at"] is None
+
+        dated = self._patch(client, link["id"], {"expires_in_days": 7}).json()
+        assert dated["expires_at"] is not None
+        row = world.db.get(ShareLink, UUID(link["id"]))
+        assert row is not None and row.expires_at is not None
+        assert row.expires_at - datetime.now(timezone.utc) < timedelta(days=7, hours=1)
+
+        kept = self._patch(client, link["id"], {"show_owner": True}).json()
+        assert kept["expires_at"] == dated["expires_at"]
+
+        cleared = self._patch(client, link["id"], {"expires_in_days": None}).json()
+        assert cleared["expires_at"] is None
+
+    def test_filters_are_replaced_and_cleared(self, client, world):
+        link = self._project_link(
+            client, world, filters={"tasks": {"statuses": ["todo"]}}
+        )
+        assert link["filters"] == {"tasks": {"statuses": ["todo"]}}
+
+        kept = self._patch(client, link["id"], {"show_owner": True}).json()
+        assert kept["filters"] == {"tasks": {"statuses": ["todo"]}}
+
+        replaced = self._patch(
+            client, link["id"], {"filters": {"tasks": {"label_ids": []}}}
+        ).json()
+        assert replaced["filters"] == {"tasks": {"label_ids": []}}
+
+        cleared = self._patch(client, link["id"], {"filters": None}).json()
+        assert cleared["filters"] is None
+
+    def test_scopes_change_and_drop_the_filters_they_carried(self, client, world):
+        """Filters are stored per scope, so narrowing the scopes drops the half
+        that is no longer carried — the same normalisation create applies."""
+        link = self._project_link(
+            client,
+            world,
+            scopes=["tasks", "sessions"],
+            filters={
+                "tasks": {"statuses": ["todo"]},
+                "sessions": {"agent_types": ["claude code"]},
+            },
+        )
+        assert set(link["filters"]) == {"tasks", "sessions"}
+        updated = self._patch(client, link["id"], {"scopes": ["sessions"]}).json()
+        assert updated["scopes"] == ["sessions"]
+        assert updated["filters"] == {"sessions": {"agent_types": ["claude code"]}}
+
+    def test_merged_shape_is_validated_like_create(self, client, world):
+        session_link = self._session_link(client, world)
+        board_link = self._project_link(client, world, allow_comments=True)
+        sessions_link = self._project_link(client, world, scopes=["sessions"])
+        bad = [
+            # A session link has neither scopes nor filters, however it is edited.
+            (session_link, {"scopes": ["tasks"]}),
+            (session_link, {"filters": {"tasks": {"statuses": ["todo"]}}}),
+            # A project link must still carry something.
+            (board_link, {"scopes": []}),
+            # Comments live on tasks: neither dropping the scope nor adding the
+            # flag may leave the pair inconsistent.
+            (board_link, {"scopes": ["sessions"]}),
+            (sessions_link, {"allow_comments": True}),
+            # Filters are still validated against the per-scope schema.
+            (board_link, {"filters": {"tasks": {"bogus": 1}}}),
+            (board_link, {"filters": {"statuses": ["todo"]}}),
+            # The audience vocabulary is closed, and the token is not a field.
+            (session_link, {"audience": "everyone"}),
+            (session_link, {"expires_in_days": 0}),
+            (session_link, {"token": "x" * 43}),
+        ]
+        _as(client, world.owner)
+        for link, body in bad:
+            assert self._patch(client, link["id"], body).status_code == 422, body
+        # None of it landed.
+        assert self._patch(client, session_link["id"], {}).json()["scopes"] == []
+        assert self._patch(client, board_link["id"], {}).json()["scopes"] == ["tasks"]
+
+    @pytest.mark.parametrize(
+        "role, expected",
+        [
+            (None, 404),  # stranger: the link is as invisible as its target
+            ("viewer", 403),
+            ("editor", 403),
+            ("admin", 200),
+        ],
+    )
+    def test_editing_needs_admin_on_the_target(self, client, world, role, expected):
+        link = self._session_link(client, world)
+        subject = _user(world.db, "s@example.com", "Subject")
+        if role is not None:
+            world.db.add(
+                ProjectGrant(
+                    project_id=world.project.id,
+                    principal_type="user",
+                    principal_id=subject.id,
+                    role=role,
+                    scopes=["tasks", "sessions"],
+                    granted_by_user_id=world.owner.id,
+                )
+            )
+        world.db.commit()
+        _as(client, subject)
+        assert (
+            self._patch(client, link["id"], {"show_owner": True}).status_code
+            == expected
+        )
+
+    def test_scoped_admin_cannot_widen_a_link(self, client, world):
+        """Standing is checked over the union of what the link carried and what
+        it would carry, so editing is not a way around the rule that you cannot
+        publish the half you cannot see yourself."""
+        link = self._project_link(client, world, scopes=["tasks"])
+        subject = _user(world.db, "s@example.com", "Subject")
+        world.db.add(
+            ProjectGrant(
+                project_id=world.project.id,
+                principal_type="user",
+                principal_id=subject.id,
+                role="admin",
+                scopes=["tasks"],
+                granted_by_user_id=world.owner.id,
+            )
+        )
+        world.db.commit()
+        _as(client, subject)
+        assert (
+            self._patch(client, link["id"], {"allow_comments": True}).status_code == 200
+        )
+        assert (
+            self._patch(
+                client, link["id"], {"scopes": ["tasks", "sessions"]}
+            ).status_code
+            == 404
+        )
+        # And the other way round: narrowing away a half they cannot see is
+        # still an edit to a link that shows it.
+        both = self._project_link(client, world, scopes=["tasks", "sessions"])
+        _as(client, subject)
+        assert self._patch(client, both["id"], {"scopes": ["tasks"]}).status_code == 404
+
+    def test_revoked_and_unknown_links_are_the_same_404(self, client, world):
+        link = self._session_link(client, world)
+        assert client.delete(f"/api/v1/shares/{link['id']}").status_code == 204
+        assert self._patch(client, link["id"], {"show_owner": True}).status_code == 404
+        assert (
+            self._patch(client, str(uuid4()), {"show_owner": True}).status_code == 404
+        )
+
 
 # ---------------------------------------------------------------------------
 # Public side: the uniform 404

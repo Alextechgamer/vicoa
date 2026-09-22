@@ -62,6 +62,8 @@ from ..models import (
     TaskLabelResponse,
     TaskResponse,
     TaskTimelineResponse,
+    UpdateShareLinkRequest,
+    normalise_share_selection,
 )
 from .queries import _get_instance_message_stats, _live_state_for
 from .task_queries import _project_vocabulary_filter
@@ -72,6 +74,10 @@ logger = logging.getLogger(__name__)
 
 class ShareTargetNotFoundError(LookupError):
     """The session / project / link is invisible to this caller (→ 404)."""
+
+
+class ShareShapeError(ValueError):
+    """A patch would leave the link in a shape create would refuse (→ 422)."""
 
 
 # The `session_config` keys a viewer may see (old plan D5): what ran, with
@@ -215,6 +221,12 @@ def _require_target_admin(
     standing over sessions, one carrying `tasks` needs it over tasks, and one
     carrying both needs both — a tasks-only admin cannot publish the
     transcripts they themselves cannot see.
+
+    With no scopes named — managing an existing link rather than deciding what
+    a new one carries — a project target still needs project-level `admin`,
+    the same floor listing uses. Without that line the scope loop is the only
+    check a project target gets, and an empty one leaves `db.get(Project, …)`:
+    a lookup by primary key, which answers for every project in the table.
     """
     if kind == "session":
         instance = (
@@ -233,7 +245,7 @@ def _require_target_admin(
     project = db.get(Project, project_id) if project_id is not None else None
     if project is None:
         raise ShareTargetNotFoundError("Project not found")
-    for scope in scopes:
+    for scope in scopes or (None,):
         role = access.project_role(
             db,
             user_id,
@@ -357,6 +369,92 @@ def list_share_links(
         .all()
     )
     return [_link_response(row) for row in rows]
+
+
+def update_share_link(
+    db: Session,
+    user_id: UUID,
+    link_id: UUID,
+    request: UpdateShareLinkRequest,
+) -> ShareLinkResponse:
+    """Edit a live link in place — same token, same target. Commits.
+
+    The token is deliberately untouchable: a link is only worth editing
+    because the URL is already out there, and re-minting is what "New link"
+    is for. Everything else about what the link *shows* is fair game.
+
+    Standing is `admin` on the target, as for create and revoke, and — when
+    the patch moves a project link's scopes — over the union of what it
+    carried and what it will carry. A tasks-only admin may narrow a
+    tasks-and-sessions link, but may not widen a tasks link into the
+    transcripts they cannot see themselves.
+
+    The merged shape goes back through `normalise_share_selection`, so a link
+    cannot be edited into a state `POST /shares` would have refused
+    (ShareShapeError → 422).
+    """
+    link = db.get(ShareLink, link_id)
+    if link is None or link.revoked_at is not None:
+        raise ShareTargetNotFoundError("Share link not found")
+    stored_scopes = list(link.scopes or [])
+    wanted_scopes = (
+        list(request.scopes) if request.scopes is not None else stored_scopes
+    )
+    try:
+        _require_target_admin(
+            db,
+            user_id,
+            kind=link.kind,
+            agent_instance_id=link.agent_instance_id,
+            project_id=link.project_id,
+            # Union: standing over what it showed and over what it will show.
+            scopes=[
+                s
+                for s in ("tasks", "sessions")
+                if s in {*stored_scopes, *wanted_scopes}
+            ],
+        )
+    except ShareTargetNotFoundError:
+        # The target is gone or invisible to this caller — so is the link.
+        raise ShareTargetNotFoundError("Share link not found") from None
+
+    allow_comments = (
+        request.allow_comments
+        if request.allow_comments is not None
+        else link.allow_comments
+    )
+    filters = request.filters if request.was_set("filters") else link.filters
+    try:
+        scopes, filters = normalise_share_selection(
+            kind=link.kind,
+            scopes=wanted_scopes,
+            filters=filters,
+            allow_comments=allow_comments,
+        )
+    except ValueError as exc:
+        raise ShareShapeError(str(exc)) from exc
+
+    link.scopes = scopes
+    link.filters = filters
+    link.allow_comments = allow_comments
+    if request.audience is not None:
+        link.audience = request.audience
+    if request.show_owner is not None:
+        link.show_owner = request.show_owner
+    if request.show_branch is not None:
+        link.show_branch = request.show_branch
+    if request.was_set("expires_in_days"):
+        # An explicit null is "never expires"; an omitted field leaves the
+        # existing deadline alone. A new window always runs from now — there
+        # is no original mint date to extend from that a viewer would notice.
+        link.expires_at = (
+            _utcnow() + timedelta(days=request.expires_in_days)
+            if request.expires_in_days is not None
+            else None
+        )
+    db.commit()
+    db.refresh(link)
+    return _link_response(link)
 
 
 def revoke_share_link(db: Session, user_id: UUID, link_id: UUID) -> None:

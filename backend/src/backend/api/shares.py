@@ -4,7 +4,7 @@ token-authorized viewer API.
 Two routers on purpose:
 
 * ``router`` — ``/shares``: signed-in, ``admin`` on the target (the same floor
-  as the per-email session shares). Create / list / revoke.
+  as the per-email session shares). Create / list / edit / revoke.
 * ``public_router`` — ``/public/shares/{token}/…``: **no auth dependency**. The
   token is the capability. ``get_optional_current_user`` is consulted only so
   an ``authenticated``-audience link can tell a signed-in visitor from an
@@ -44,7 +44,7 @@ from shared.ratelimit import client_ip, public_share_rate_limit
 
 from ..auth.dependencies import get_current_user, get_optional_current_user
 from ..db import share_queries, task_timeline_queries
-from ..db.share_queries import ShareTargetNotFoundError
+from ..db.share_queries import ShareShapeError, ShareTargetNotFoundError
 from ..models import (
     CreateShareLinkRequest,
     CreateTaskCommentRequest,
@@ -55,6 +55,7 @@ from ..models import (
     PublicShareResponse,
     ShareLinkResponse,
     TaskTimelineResponse,
+    UpdateShareLinkRequest,
 )
 
 logger = logging.getLogger(__name__)
@@ -115,6 +116,31 @@ def list_share_links_endpoint(
         )
     except ShareTargetNotFoundError as exc:
         raise _not_found(exc) from exc
+
+
+@router.patch("/shares/{link_id}", response_model=ShareLinkResponse)
+def update_share_link_endpoint(
+    link_id: UUID,
+    request: UpdateShareLinkRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> ShareLinkResponse:
+    """Edit what a link shows, keeping its token.
+
+    Without this the only way to change a setting was to mint a second link
+    and revoke the first — which breaks every copy of the URL already sent
+    out, the one thing a share link exists to avoid. Same `admin`-on-target
+    floor as create and revoke; the merged shape is validated exactly as
+    `CreateShareLinkRequest` validates a new one.
+    """
+    try:
+        return share_queries.update_share_link(db, current_user.id, link_id, request)
+    except ShareTargetNotFoundError as exc:
+        raise _not_found(exc) from exc
+    except ShareShapeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
 
 
 @router.delete("/shares/{link_id}", status_code=status.HTTP_204_NO_CONTENT)

@@ -829,6 +829,27 @@ export interface CreateShareLinkRequest {
   expires_in_days?: number | null;
 }
 
+/**
+ * Edit a live link in place. Every field is optional and absent means "leave
+ * it alone"; the token, kind and target are not editable at all — a link is
+ * only worth editing because its URL is already out there.
+ *
+ * `null` is meaningful on two of them (no expiry / no filters), so the caller
+ * must omit a key rather than pass `undefined` for "unchanged" — `undefined`
+ * disappears in `JSON.stringify`, which happens to be the same thing, but the
+ * intent is worth stating.
+ */
+export interface UpdateShareLinkRequest {
+  scopes?: ShareScope[];
+  audience?: ShareAudience;
+  filters?: ShareProjectFilters | null;
+  allow_comments?: boolean;
+  show_owner?: boolean;
+  show_branch?: boolean;
+  /** `null` = never expires. A new window always runs from now. */
+  expires_in_days?: number | null;
+}
+
 export interface ShareLinkResponse {
   id: string;
   /** The capability itself — the URL is `/share/<token>`. */
@@ -1906,6 +1927,17 @@ class BackendAPI {
   ): Promise<ShareLinkResponse[]> {
     const params = new URLSearchParams(target);
     return this.request<ShareLinkResponse[]>(`/api/v1/shares?${params.toString()}`);
+  }
+
+  /** Edit an existing link's settings, keeping its token. */
+  async updateShareLink(
+    linkId: string,
+    data: UpdateShareLinkRequest,
+  ): Promise<ShareLinkResponse> {
+    return this.request<ShareLinkResponse>(`/api/v1/shares/${linkId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    });
   }
 
   async revokeShareLink(linkId: string): Promise<void> {

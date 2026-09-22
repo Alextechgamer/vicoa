@@ -1271,6 +1271,53 @@ class ShareProjectFilters(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+def normalise_share_selection(
+    *,
+    kind: str,
+    scopes: list[str],
+    filters: dict | None,
+    allow_comments: bool,
+) -> tuple[list[str], dict | None]:
+    """The kind-dependent half of a link's shape, shared by create and update.
+
+    A session link carries neither scopes nor filters — the session is the
+    whole subject. A project link carries at least one scope, and its filters
+    are validated per scope, stored in a stable order and trimmed to the
+    scopes the link actually carries. Comments live on tasks, so no link
+    without that half may allow them.
+
+    PATCH validates the *merged* shape (the stored kind, the patched fields)
+    through this same function, so a link can never be edited into a state
+    `POST /shares` would have refused. Raises ValueError, which reaches the
+    caller as a 422 either way (a Pydantic validator on create, the explicit
+    handler on update).
+    """
+    if kind == "session":
+        if filters:
+            raise ValueError("a session link has no filters")
+        if scopes:
+            raise ValueError("a session link has no scopes")
+        scopes, filters = [], None
+    else:
+        # De-duplicate but keep the caller's order out of the stored value:
+        # scopes are a set, and a stable order makes rows comparable.
+        scopes = [s for s in ("tasks", "sessions") if s in scopes]
+        if not scopes:
+            raise ValueError("a project link must carry at least one scope")
+        if filters is not None:
+            # Validate against the per-scope schema; store the normalised
+            # form, and drop the half of it the link does not carry.
+            parsed = ShareProjectFilters.model_validate(filters)
+            filters = {
+                scope: getattr(parsed, scope).model_dump(mode="json", exclude_none=True)
+                for scope in scopes
+                if getattr(parsed, scope) is not None
+            } or None
+    if allow_comments and "tasks" not in scopes:
+        raise ValueError("Comments need a link that carries tasks")
+    return scopes, filters
+
+
 class CreateShareLinkRequest(BaseModel):
     kind: ShareKindLiteral
     agent_instance_id: UUID | None = None
@@ -1295,32 +1342,46 @@ class CreateShareLinkRequest(BaseModel):
         if self.kind == "session":
             if self.agent_instance_id is None or self.project_id is not None:
                 raise ValueError("kind='session' takes agent_instance_id only")
-            if self.filters:
-                raise ValueError("a session link has no filters")
-            if self.scopes:
-                raise ValueError("a session link has no scopes")
-        else:
-            if self.project_id is None or self.agent_instance_id is not None:
-                raise ValueError("kind='project' takes project_id only")
-            # De-duplicate but keep the caller's order out of the stored value:
-            # scopes are a set, and a stable order makes rows comparable.
-            self.scopes = [s for s in ("tasks", "sessions") if s in self.scopes]  # type: ignore[misc]
-            if not self.scopes:
-                raise ValueError("a project link must carry at least one scope")
-            if self.filters is not None:
-                # Validate against the per-scope schema; store the normalised
-                # form, and drop the half of it the link does not carry.
-                parsed = ShareProjectFilters.model_validate(self.filters)
-                self.filters = {
-                    scope: getattr(parsed, scope).model_dump(
-                        mode="json", exclude_none=True
-                    )
-                    for scope in self.scopes
-                    if getattr(parsed, scope) is not None
-                } or None
-        if self.allow_comments and "tasks" not in self.scopes:
-            raise ValueError("Comments need a link that carries tasks")
+        elif self.project_id is None or self.agent_instance_id is not None:
+            raise ValueError("kind='project' takes project_id only")
+        self.scopes, self.filters = normalise_share_selection(  # type: ignore[assignment]
+            kind=self.kind,
+            scopes=list(self.scopes),
+            filters=self.filters,
+            allow_comments=self.allow_comments,
+        )
         return self
+
+
+class UpdateShareLinkRequest(BaseModel):
+    """Edit a link in place, keeping its token (§3.4).
+
+    Every field is optional and absent means "leave it alone", so a caller
+    changing one switch does not have to restate the rest. What it cannot
+    touch is the link's identity: the token, the kind and the target are not
+    fields here, because the whole point of editing rather than re-minting is
+    that a URL already sent out keeps working and keeps pointing at the same
+    subject.
+
+    Two fields carry a meaningful ``null`` — ``expires_in_days: null`` means
+    "never expires" and ``filters: null`` means "no narrowing" — so the route
+    reads `model_fields_set` to tell an explicit null from an omission rather
+    than treating both as "unchanged".
+    """
+
+    scopes: list[ShareScopeLiteral] | None = None
+    audience: ShareAudienceLiteral | None = None
+    filters: dict | None = None
+    allow_comments: bool | None = None
+    show_owner: bool | None = None
+    show_branch: bool | None = None
+    expires_in_days: int | None = Field(default=None, ge=1, le=365)
+
+    model_config = ConfigDict(extra="forbid")
+
+    def was_set(self, field: str) -> bool:
+        """Did the caller name this field at all (null included)?"""
+        return field in self.model_fields_set
 
 
 class ShareLinkResponse(BaseModel):

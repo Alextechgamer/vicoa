@@ -8,6 +8,11 @@
 // link and copies it in one go. Everything else — other links, revoke — is
 // behind a disclosure so the default view is one field and one button.
 //
+// "Settings" reopens that same composer over the *existing* link and saves
+// with PATCH, so changing who can open a link does not break every copy of
+// the URL already sent out. "New link" stays, for when a fresh token is the
+// point; it is no longer the only way to change anything.
+//
 // One dialog shares one subject: a session, or a project. A project link is
 // one URL with a content selection — "Tasks" and "Sessions", the same two
 // halves a project grant names — rather than one link per kind of content,
@@ -30,6 +35,7 @@ import {
   Link2,
   Loader2,
   Lock,
+  Save,
   Trash2,
 } from 'lucide-react';
 import {
@@ -61,6 +67,7 @@ import type {
   ShareSessionsFilters,
   TaskLabelResponse,
   TaskStatus,
+  UpdateShareLinkRequest,
   UserProfile,
 } from '@/lib/backend-api';
 import { shareUrl } from '@/lib/public-share-api';
@@ -84,6 +91,14 @@ export type ShareTarget =
       /** Which half the composer starts on: the Tasks page ticks tasks, the sidebar sessions. */
       initialScope: ShareScope;
     };
+
+/**
+ * "Keep the deadline this link already has". `expires_at` is a date and the
+ * picker speaks in "in N days", so an existing expiry cannot be shown as one
+ * of the options below without guessing which one minted it — it is offered
+ * as itself instead, and saving simply omits the field.
+ */
+const KEEP_EXPIRY = 'keep';
 
 const EXPIRY_OPTIONS: { value: string; label: string; days: number | null }[] = [
   { value: 'never', label: 'Never', days: null },
@@ -377,15 +392,21 @@ export function ShareLinkPanel({ api, target }: { api: BackendAPI | null; target
   const [labels, setLabels] = useState<TaskLabelResponse[]>([]);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [sessionFiltersOpen, setSessionFiltersOpen] = useState(false);
-  /** The visitor asked for a new link although one already exists. */
-  const [composing, setComposing] = useState(false);
+  /**
+   * What the link slot is doing. `create` is "a new link although one already
+   * exists"; `edit` is the same composer over the current link, saved with
+   * PATCH so its token survives.
+   */
+  const [mode, setMode] = useState<'view' | 'create' | 'edit'>('view');
 
   const [links, setLinks] = useState<ShareLinkResponse[] | null>(null);
   /** undefined = not loaded; drives the "you have no name" prompt only. */
   const [ownName, setOwnName] = useState<string | null | undefined>(undefined);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
-  const [createError, setCreateError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  /** Shared by create and save — one composer, one place for its failure. */
+  const [formError, setFormError] = useState<string | null>(null);
   const [revoking, setRevoking] = useState<string | null>(null);
   const [confirmRevoke, setConfirmRevoke] = useState<string | null>(null);
   const [othersOpen, setOthersOpen] = useState(false);
@@ -395,6 +416,7 @@ export function ShareLinkPanel({ api, target }: { api: BackendAPI | null; target
   // the object would refetch the links on each of those renders.
   const targetInstanceId = target.kind === 'session' ? target.instanceId : null;
   const targetProjectId = target.kind !== 'session' ? target.projectId : null;
+  const initialScope = target.kind === 'project' ? target.initialScope : null;
   const listTarget = useMemo(
     () => (targetInstanceId ? { agent_instance_id: targetInstanceId } : { project_id: targetProjectId ?? '' }),
     [targetInstanceId, targetProjectId],
@@ -460,12 +482,28 @@ export function ShareLinkPanel({ api, target }: { api: BackendAPI | null; target
   );
   const current = sorted[0] ?? null;
   const others = sorted.slice(1);
-  const showComposer = links !== null && (current === null || composing);
-  /** Transcripts are on the page, so the secrets warning and branches apply. */
-  const showsTranscripts = kind === 'session' || scopes.includes('sessions');
+  const showComposer = links !== null && (current === null || mode !== 'view');
+  /**
+   * Transcripts are on the page, so the secrets warning and the branch switch
+   * apply. While the composer is open that follows the form; while the link
+   * itself is on screen it follows the link, which need not carry the half
+   * the form happens to have ticked.
+   */
+  const showsTranscripts =
+    kind === 'session' ||
+    (showComposer ? scopes.includes('sessions') : (current?.scopes.includes('sessions') ?? false));
   const sharesTasks = scopes.includes('tasks');
   /** The account has loaded and carries no name (`''` = we could not tell). */
   const needsName = ownName === null;
+  /** The composer is open over an existing link rather than minting one. */
+  const editing = mode === 'edit' && current !== null;
+  const expiryOptions = useMemo(
+    () =>
+      editing && current?.expires_at
+        ? [{ value: KEEP_EXPIRY, label: formatExpiry(current.expires_at), days: null }, ...EXPIRY_OPTIONS]
+        : EXPIRY_OPTIONS,
+    [editing, current?.expires_at],
+  );
 
   const toggleScope = useCallback((scope: ShareScope) => {
     setScopes((prev) =>
@@ -479,28 +517,67 @@ export function ShareLinkPanel({ api, target }: { api: BackendAPI | null; target
     if (allowComments && !sharesTasks) setAllowComments(false);
   }, [allowComments, sharesTasks]);
 
+  /** The filters the form currently describes; null = no narrowing. */
+  const buildFilters = useCallback((): ShareProjectFilters | null => {
+    const filters: ShareProjectFilters = {};
+    if (sharesTasks) {
+      const f: ShareBoardFilters = {};
+      if (statuses.length) f.statuses = statuses;
+      if (labelIds.length) f.label_ids = labelIds;
+      if (Object.keys(f).length) filters.tasks = f;
+    }
+    if (scopes.includes('sessions')) {
+      const f: ShareSessionsFilters = {};
+      if (includeArchived) {
+        f.statuses = ['STARTING', 'ACTIVE', 'AWAITING_INPUT', 'REVIEWED', 'PAUSED', 'STALE', 'COMPLETED', 'FAILED', 'KILLED', 'DISCONNECTED'];
+      }
+      if (dateFrom) f.date_from = `${dateFrom}T00:00:00Z`;
+      if (dateTo) f.date_to = `${dateTo}T23:59:59Z`;
+      if (Object.keys(f).length) filters.sessions = f;
+    }
+    return Object.keys(filters).length ? filters : null;
+  }, [sharesTasks, scopes, statuses, labelIds, includeArchived, dateFrom, dateTo]);
+
+  /**
+   * Point the composer at a link (edit) or at nothing (a fresh one). Editing
+   * has to start from what the link actually says, or the first Save would
+   * quietly reset every setting the form never loaded.
+   */
+  const seedForm = useCallback(
+    (link: ShareLinkResponse | null) => {
+      setScopes(link ? link.scopes : initialScope ? [initialScope] : []);
+      setAudience(link?.audience ?? 'public');
+      setExpiry(link?.expires_at ? KEEP_EXPIRY : 'never');
+      setAllowComments(link?.allow_comments ?? false);
+      setShowOwner(link?.show_owner ?? false);
+      setShowBranch(link?.show_branch ?? false);
+      const tasks = link?.filters?.tasks;
+      const sessions = link?.filters?.sessions;
+      setStatuses(tasks?.statuses ?? []);
+      setLabelIds(tasks?.label_ids ?? []);
+      setIncludeArchived(Boolean(sessions?.statuses?.length));
+      setDateFrom(sessions?.date_from?.slice(0, 10) ?? '');
+      setDateTo(sessions?.date_to?.slice(0, 10) ?? '');
+    },
+    [initialScope],
+  );
+
+  const openComposer = useCallback(
+    (next: 'create' | 'edit') => {
+      seedForm(next === 'edit' ? current : null);
+      setFormError(null);
+      setMode(next);
+    },
+    [current, seedForm],
+  );
+
   const handleCreate = useCallback(async () => {
     if (!api) return;
     setCreating(true);
-    setCreateError(null);
+    setFormError(null);
     try {
       const days = EXPIRY_OPTIONS.find((o) => o.value === expiry)?.days ?? null;
-      const filters: ShareProjectFilters = {};
-      if (sharesTasks) {
-        const f: ShareBoardFilters = {};
-        if (statuses.length) f.statuses = statuses;
-        if (labelIds.length) f.label_ids = labelIds;
-        if (Object.keys(f).length) filters.tasks = f;
-      }
-      if (scopes.includes('sessions')) {
-        const f: ShareSessionsFilters = {};
-        if (includeArchived) {
-          f.statuses = ['STARTING', 'ACTIVE', 'AWAITING_INPUT', 'REVIEWED', 'PAUSED', 'STALE', 'COMPLETED', 'FAILED', 'KILLED', 'DISCONNECTED'];
-        }
-        if (dateFrom) f.date_from = `${dateFrom}T00:00:00Z`;
-        if (dateTo) f.date_to = `${dateTo}T23:59:59Z`;
-        if (Object.keys(f).length) filters.sessions = f;
-      }
+      const filters = buildFilters();
       const link = await api.createShareLink({
         kind,
         ...(target.kind === 'session'
@@ -511,18 +588,52 @@ export function ShareLinkPanel({ api, target }: { api: BackendAPI | null; target
         show_owner: showOwner,
         show_branch: showsTranscripts && showBranch,
         expires_in_days: days,
-        filters: Object.keys(filters).length ? filters : null,
+        filters,
       });
       setLinks((prev) => [link, ...(prev ?? [])]);
-      setComposing(false);
+      setMode('view');
       // One click: the new link is on the clipboard before the panel re-renders.
       void copy(shareUrl(link.token), link.id);
     } catch (err) {
-      setCreateError(err instanceof Error ? err.message : 'Failed to create link');
+      setFormError(err instanceof Error ? err.message : 'Failed to create link');
     } finally {
       setCreating(false);
     }
-  }, [api, target, expiry, kind, scopes, sharesTasks, statuses, labelIds, includeArchived, dateFrom, dateTo, audience, allowComments, showOwner, showBranch, showsTranscripts, copy]);
+  }, [api, target, expiry, kind, scopes, sharesTasks, buildFilters, audience, allowComments, showOwner, showBranch, showsTranscripts, copy]);
+
+  /**
+   * Save the composer over the link it was opened on. Same fields as create,
+   * one endpoint apart — and that difference is the whole feature: the token
+   * does not change, so every copy of the URL already sent out keeps working
+   * and starts obeying the new settings.
+   */
+  const handleSave = useCallback(async () => {
+    if (!api || !current) return;
+    setSaving(true);
+    setFormError(null);
+    try {
+      const patch: UpdateShareLinkRequest = {
+        audience,
+        allow_comments: sharesTasks && allowComments,
+        show_owner: showOwner,
+        show_branch: showsTranscripts && showBranch,
+        filters: buildFilters(),
+        ...(isProject ? { scopes } : {}),
+      };
+      // Every other option restates the deadline; "keep" is the one that means
+      // "leave it alone", and says so by omitting the field.
+      if (expiry !== KEEP_EXPIRY) {
+        patch.expires_in_days = EXPIRY_OPTIONS.find((o) => o.value === expiry)?.days ?? null;
+      }
+      const link = await api.updateShareLink(current.id, patch);
+      setLinks((prev) => (prev ?? []).map((row) => (row.id === link.id ? link : row)));
+      setMode('view');
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : 'Failed to save changes');
+    } finally {
+      setSaving(false);
+    }
+  }, [api, current, audience, sharesTasks, allowComments, showOwner, showBranch, showsTranscripts, expiry, buildFilters, isProject, scopes]);
 
   const handleRevoke = useCallback(
     async (linkId: string) => {
@@ -537,6 +648,8 @@ export function ShareLinkPanel({ api, target }: { api: BackendAPI | null; target
       try {
         await api.revokeShareLink(linkId);
         setLinks((prev) => (prev ?? []).filter((l) => l.id !== linkId));
+        // The composer may have been open over the link that just died.
+        setMode('view');
       } catch (err) {
         setLoadError(err instanceof Error ? err.message : 'Failed to revoke link');
       } finally {
@@ -576,9 +689,19 @@ export function ShareLinkPanel({ api, target }: { api: BackendAPI | null; target
           <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
             <LinkFacts link={current} className="min-w-0 flex-1" />
             <span className="ml-auto inline-flex shrink-0 items-center gap-2">
+              {/* Edits this link. "New link" is next to it because minting a
+                  fresh token is a different intention, not the only way to
+                  change a setting. */}
               <button
                 type="button"
-                onClick={() => setComposing(true)}
+                onClick={() => openComposer('edit')}
+                className={cn('cursor-pointer rounded underline-offset-2 hover:text-foreground hover:underline', FOCUS_RING)}
+              >
+                Settings
+              </button>
+              <button
+                type="button"
+                onClick={() => openComposer('create')}
                 className={cn('cursor-pointer rounded underline-offset-2 hover:text-foreground hover:underline', FOCUS_RING)}
               >
                 New link
@@ -645,7 +768,7 @@ export function ShareLinkPanel({ api, target }: { api: BackendAPI | null; target
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent className="font-mono text-xs">
-                  {EXPIRY_OPTIONS.map((o) => (
+                  {expiryOptions.map((o) => (
                     <SelectItem key={o.value} value={o.value} className="text-xs">
                       {o.label}
                     </SelectItem>
@@ -755,20 +878,31 @@ export function ShareLinkPanel({ api, target }: { api: BackendAPI | null; target
             </Disclosure>
           )}
 
-          {createError && <p className="text-xs text-destructive">{createError}</p>}
+          {editing && (
+            <p className="text-[11px] leading-snug text-muted-foreground">
+              Saving keeps the same link — everyone you have already sent it to sees these settings instead.
+            </p>
+          )}
+          {formError && <p className="text-xs text-destructive">{formError}</p>}
           <div className="flex gap-2">
             <Button
               type="button"
               size="sm"
               className="h-9 flex-1 gap-1.5 text-xs"
-              onClick={() => void handleCreate()}
-              disabled={!api || creating || (isProject && scopes.length === 0)}
+              onClick={() => void (editing ? handleSave() : handleCreate())}
+              disabled={!api || creating || saving || (isProject && scopes.length === 0)}
             >
-              {creating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Link2 className="h-3.5 w-3.5" />}
-              Create link
+              {creating || saving ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : editing ? (
+                <Save className="h-3.5 w-3.5" />
+              ) : (
+                <Link2 className="h-3.5 w-3.5" />
+              )}
+              {editing ? 'Save changes' : 'Create link'}
             </Button>
             {current && (
-              <Button type="button" size="sm" variant="ghost" className="h-9 text-xs" onClick={() => setComposing(false)}>
+              <Button type="button" size="sm" variant="ghost" className="h-9 cursor-pointer text-xs" onClick={() => setMode('view')}>
                 Cancel
               </Button>
             )}
