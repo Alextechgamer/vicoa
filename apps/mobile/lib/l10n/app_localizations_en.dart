@@ -1977,6 +1977,136 @@ class AppLocalizationsEn extends AppLocalizations {
       'Bring coding agents to your phone 🚀';
 
   @override
+  String get shareLinkAudience => 'Who can open it';
+
+  @override
+  String get shareLinkAudienceAuthenticated => 'Vicoa users only';
+
+  @override
+  String get shareLinkAudiencePublic => 'Anyone with the link';
+
+  @override
+  String get shareLinkCopied => 'Link copied';
+
+  @override
+  String get shareLinkCreate => 'Create share link';
+
+  @override
+  String get shareLinkCreateFailed => 'Couldn\'t create the link';
+
+  @override
+  String get shareLinkCreating => 'Creating link…';
+
+  @override
+  String get shareLinkDescription =>
+      'Anyone who opens this link follows this session live, and keeps seeing what happens next until you revoke it.';
+
+  @override
+  String get shareLinkExpired => 'Expired';
+
+  @override
+  String shareLinkExpiresOn(String date) {
+    return 'Expires $date';
+  }
+
+  @override
+  String get shareLinkExpiry => 'Expires';
+
+  @override
+  String shareLinkExpiryInDays(num count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: 'In $count days',
+      one: 'In 1 day',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get shareLinkExpiryNever => 'Never';
+
+  @override
+  String get shareLinkExportRow => 'Export messages';
+
+  @override
+  String get shareLinkExportSubtitle =>
+      'Pick messages, then share them as text or a file';
+
+  @override
+  String get shareLinkLoadFailed => 'Couldn\'t load share links';
+
+  @override
+  String get shareLinkNeverExpires => 'Never expires';
+
+  @override
+  String shareLinkOtherLinks(num count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count other links',
+      one: '1 other link',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get shareLinkPreview => 'Preview as a visitor';
+
+  @override
+  String get shareLinkRetry => 'Try again';
+
+  @override
+  String get shareLinkRevoke => 'Revoke link';
+
+  @override
+  String get shareLinkRevokeContent =>
+      'Anyone who already has the link loses access.';
+
+  @override
+  String get shareLinkRevokeFailed => 'Couldn\'t revoke the link';
+
+  @override
+  String get shareLinkRevokeTitle => 'Revoke link?';
+
+  @override
+  String get shareLinkSectionExport => 'Export';
+
+  @override
+  String get shareLinkSectionLink => 'Link';
+
+  @override
+  String get shareLinkSettings => 'Link settings';
+
+  @override
+  String get shareLinkSheetTitle => 'Share';
+
+  @override
+  String get shareLinkShowBranch => 'Show branch names';
+
+  @override
+  String get shareLinkShowOwner => 'Show my name and avatar';
+
+  @override
+  String get shareLinkUpdateFailed => 'Couldn\'t save that setting';
+
+  @override
+  String shareLinkViews(num count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count views',
+      one: '1 view',
+      zero: 'No views',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get shareLinkWarning =>
+      'Anyone with this link can read the full transcript, including any file contents or credentials the agent printed.';
+
+  @override
   String get shareOptionsSheetCopiedToClipboard =>
       'Content copied to clipboard';
 

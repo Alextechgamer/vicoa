@@ -3,6 +3,7 @@ import 'package:vicoa/backend/push_notifications/notification_util.dart';
 import 'agent_filters_panel.dart';
 import 'session_list.dart';
 import '/pages/common/session_actions.dart';
+import '/pages/share_session_sheet/share_session_sheet_widget.dart';
 import '/flutter_flow/flutter_flow_icon_button.dart';
 import '/flutter_flow/flutter_flow_theme.dart';
 import '/flutter_flow/flutter_flow_util.dart';
@@ -916,7 +917,6 @@ class _HomeWidgetState extends State<HomeWidget>
               child: Material(
                 color: Colors.transparent,
                 child: ChatOptionsMenu(
-                  showShareOption: false,
                   showCloseOption: showCloseOption,
                   isPinned: instance['pinned_at'] != null,
                   onPin: () {
@@ -927,7 +927,10 @@ class _HomeWidgetState extends State<HomeWidget>
                     Navigator.of(dialogContext).pop();
                     _showSessionInfoFor(instance);
                   },
-                  onShare: () => Navigator.of(dialogContext).pop(),
+                  onShare: () {
+                    Navigator.of(dialogContext).pop();
+                    _showShareSheetFor(instance);
+                  },
                   onRename: () {
                     Navigator.of(dialogContext).pop();
                     _showRenameDialogFor(instance);
@@ -961,6 +964,26 @@ class _HomeWidgetState extends State<HomeWidget>
           ),
         );
       },
+    );
+  }
+
+  /// Share from the session list. Only the Link section: a link needs the
+  /// session's id and nothing else, while the export flow below it needs the
+  /// messages, which this page has never loaded.
+  Future<void> _showShareSheetFor(Map<String, dynamic> instance) async {
+    final instanceId = instance['id']?.toString();
+    if (instanceId == null || instanceId.isEmpty) return;
+    logFirebaseEvent('HOME_PAGE_session_share_open');
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      isDismissible: true,
+      enableDrag: true,
+      builder: (_) => ShareSessionSheetWidget(
+        instanceId: instanceId,
+        sessionTitle: instance['name']?.toString(),
+      ),
     );
   }
 

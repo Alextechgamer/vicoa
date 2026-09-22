@@ -63,7 +63,7 @@ import 'app_localizations_zh.dart';
 /// property.
 abstract class AppLocalizations {
   AppLocalizations(String locale)
-      : localeName = intl.Intl.canonicalizedLocale(locale.toString());
+    : localeName = intl.Intl.canonicalizedLocale(locale.toString());
 
   final String localeName;
 
@@ -86,16 +86,16 @@ abstract class AppLocalizations {
   /// of delegates is preferred or required.
   static const List<LocalizationsDelegate<dynamic>> localizationsDelegates =
       <LocalizationsDelegate<dynamic>>[
-    delegate,
-    GlobalMaterialLocalizations.delegate,
-    GlobalCupertinoLocalizations.delegate,
-    GlobalWidgetsLocalizations.delegate,
-  ];
+        delegate,
+        GlobalMaterialLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+      ];
 
   /// A list of this localizations delegate's supported locales.
   static const List<Locale> supportedLocales = <Locale>[
     Locale('en'),
-    Locale('zh')
+    Locale('zh'),
   ];
 
   /// No description provided for @tasksAllProjects.
@@ -3668,6 +3668,204 @@ abstract class AppLocalizations {
   /// **'Bring coding agents to your phone 🚀'**
   String get setupReminderNotificationTitle;
 
+  /// No description provided for @shareLinkAudience.
+  ///
+  /// In en, this message translates to:
+  /// **'Who can open it'**
+  String get shareLinkAudience;
+
+  /// No description provided for @shareLinkAudienceAuthenticated.
+  ///
+  /// In en, this message translates to:
+  /// **'Vicoa users only'**
+  String get shareLinkAudienceAuthenticated;
+
+  /// No description provided for @shareLinkAudiencePublic.
+  ///
+  /// In en, this message translates to:
+  /// **'Anyone with the link'**
+  String get shareLinkAudiencePublic;
+
+  /// No description provided for @shareLinkCopied.
+  ///
+  /// In en, this message translates to:
+  /// **'Link copied'**
+  String get shareLinkCopied;
+
+  /// No description provided for @shareLinkCreate.
+  ///
+  /// In en, this message translates to:
+  /// **'Create share link'**
+  String get shareLinkCreate;
+
+  /// No description provided for @shareLinkCreateFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Couldn\'t create the link'**
+  String get shareLinkCreateFailed;
+
+  /// No description provided for @shareLinkCreating.
+  ///
+  /// In en, this message translates to:
+  /// **'Creating link…'**
+  String get shareLinkCreating;
+
+  /// No description provided for @shareLinkDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Anyone who opens this link follows this session live, and keeps seeing what happens next until you revoke it.'**
+  String get shareLinkDescription;
+
+  /// No description provided for @shareLinkExpired.
+  ///
+  /// In en, this message translates to:
+  /// **'Expired'**
+  String get shareLinkExpired;
+
+  /// When the link stops working.
+  ///
+  /// In en, this message translates to:
+  /// **'Expires {date}'**
+  String shareLinkExpiresOn(String date);
+
+  /// No description provided for @shareLinkExpiry.
+  ///
+  /// In en, this message translates to:
+  /// **'Expires'**
+  String get shareLinkExpiry;
+
+  /// Expiry option: how long from now the link stays live.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =1{In 1 day} other{In {count} days}}'**
+  String shareLinkExpiryInDays(num count);
+
+  /// No description provided for @shareLinkExpiryNever.
+  ///
+  /// In en, this message translates to:
+  /// **'Never'**
+  String get shareLinkExpiryNever;
+
+  /// No description provided for @shareLinkExportRow.
+  ///
+  /// In en, this message translates to:
+  /// **'Export messages'**
+  String get shareLinkExportRow;
+
+  /// No description provided for @shareLinkExportSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Pick messages, then share them as text or a file'**
+  String get shareLinkExportSubtitle;
+
+  /// No description provided for @shareLinkLoadFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Couldn\'t load share links'**
+  String get shareLinkLoadFailed;
+
+  /// No description provided for @shareLinkNeverExpires.
+  ///
+  /// In en, this message translates to:
+  /// **'Never expires'**
+  String get shareLinkNeverExpires;
+
+  /// Header for the links on this session other than the newest.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =1{1 other link} other{{count} other links}}'**
+  String shareLinkOtherLinks(num count);
+
+  /// No description provided for @shareLinkPreview.
+  ///
+  /// In en, this message translates to:
+  /// **'Preview as a visitor'**
+  String get shareLinkPreview;
+
+  /// No description provided for @shareLinkRetry.
+  ///
+  /// In en, this message translates to:
+  /// **'Try again'**
+  String get shareLinkRetry;
+
+  /// No description provided for @shareLinkRevoke.
+  ///
+  /// In en, this message translates to:
+  /// **'Revoke link'**
+  String get shareLinkRevoke;
+
+  /// No description provided for @shareLinkRevokeContent.
+  ///
+  /// In en, this message translates to:
+  /// **'Anyone who already has the link loses access.'**
+  String get shareLinkRevokeContent;
+
+  /// No description provided for @shareLinkRevokeFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Couldn\'t revoke the link'**
+  String get shareLinkRevokeFailed;
+
+  /// No description provided for @shareLinkRevokeTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Revoke link?'**
+  String get shareLinkRevokeTitle;
+
+  /// No description provided for @shareLinkSectionExport.
+  ///
+  /// In en, this message translates to:
+  /// **'Export'**
+  String get shareLinkSectionExport;
+
+  /// No description provided for @shareLinkSectionLink.
+  ///
+  /// In en, this message translates to:
+  /// **'Link'**
+  String get shareLinkSectionLink;
+
+  /// No description provided for @shareLinkSettings.
+  ///
+  /// In en, this message translates to:
+  /// **'Link settings'**
+  String get shareLinkSettings;
+
+  /// No description provided for @shareLinkSheetTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Share'**
+  String get shareLinkSheetTitle;
+
+  /// No description provided for @shareLinkShowBranch.
+  ///
+  /// In en, this message translates to:
+  /// **'Show branch names'**
+  String get shareLinkShowBranch;
+
+  /// No description provided for @shareLinkShowOwner.
+  ///
+  /// In en, this message translates to:
+  /// **'Show my name and avatar'**
+  String get shareLinkShowOwner;
+
+  /// No description provided for @shareLinkUpdateFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Couldn\'t save that setting'**
+  String get shareLinkUpdateFailed;
+
+  /// How many times the link has been opened.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =0{No views} =1{1 view} other{{count} views}}'**
+  String shareLinkViews(num count);
+
+  /// No description provided for @shareLinkWarning.
+  ///
+  /// In en, this message translates to:
+  /// **'Anyone with this link can read the full transcript, including any file contents or credentials the agent printed.'**
+  String get shareLinkWarning;
+
   /// No description provided for @shareOptionsSheetCopiedToClipboard.
   ///
   /// In en, this message translates to:
@@ -5532,8 +5730,9 @@ AppLocalizations lookupAppLocalizations(Locale locale) {
   }
 
   throw FlutterError(
-      'AppLocalizations.delegate failed to load unsupported locale "$locale". This is likely '
-      'an issue with the localizations generation tool. Please file an issue '
-      'on GitHub with a reproducible sample app and the gen-l10n configuration '
-      'that was used.');
+    'AppLocalizations.delegate failed to load unsupported locale "$locale". This is likely '
+    'an issue with the localizations generation tool. Please file an issue '
+    'on GitHub with a reproducible sample app and the gen-l10n configuration '
+    'that was used.',
+  );
 }

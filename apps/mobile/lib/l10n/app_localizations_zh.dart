@@ -1896,6 +1896,132 @@ class AppLocalizationsZh extends AppLocalizations {
   String get setupReminderNotificationTitle => '把编程代理带到你的手机上 🚀';
 
   @override
+  String get shareLinkAudience => '谁可以打开';
+
+  @override
+  String get shareLinkAudienceAuthenticated => '仅限 Vicoa 用户';
+
+  @override
+  String get shareLinkAudiencePublic => '任何拿到链接的人';
+
+  @override
+  String get shareLinkCopied => '链接已复制';
+
+  @override
+  String get shareLinkCreate => '创建分享链接';
+
+  @override
+  String get shareLinkCreateFailed => '无法创建链接';
+
+  @override
+  String get shareLinkCreating => '正在创建链接…';
+
+  @override
+  String get shareLinkDescription => '打开此链接的人可以实时跟进这个会话，并持续看到后续内容，直到你撤销链接。';
+
+  @override
+  String get shareLinkExpired => '已过期';
+
+  @override
+  String shareLinkExpiresOn(String date) {
+    return '$date 过期';
+  }
+
+  @override
+  String get shareLinkExpiry => '有效期';
+
+  @override
+  String shareLinkExpiryInDays(num count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count 天后',
+      one: '1 天后',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get shareLinkExpiryNever => '永不过期';
+
+  @override
+  String get shareLinkExportRow => '导出消息';
+
+  @override
+  String get shareLinkExportSubtitle => '选择消息，然后以文本或文件分享';
+
+  @override
+  String get shareLinkLoadFailed => '无法加载分享链接';
+
+  @override
+  String get shareLinkNeverExpires => '永不过期';
+
+  @override
+  String shareLinkOtherLinks(num count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '另外 $count 个链接',
+      one: '另外 1 个链接',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get shareLinkPreview => '以访客身份预览';
+
+  @override
+  String get shareLinkRetry => '重试';
+
+  @override
+  String get shareLinkRevoke => '撤销链接';
+
+  @override
+  String get shareLinkRevokeContent => '已经拿到链接的人将无法再访问。';
+
+  @override
+  String get shareLinkRevokeFailed => '无法撤销链接';
+
+  @override
+  String get shareLinkRevokeTitle => '撤销链接？';
+
+  @override
+  String get shareLinkSectionExport => '导出';
+
+  @override
+  String get shareLinkSectionLink => '链接';
+
+  @override
+  String get shareLinkSettings => '链接设置';
+
+  @override
+  String get shareLinkSheetTitle => '分享';
+
+  @override
+  String get shareLinkShowBranch => '显示分支名称';
+
+  @override
+  String get shareLinkShowOwner => '显示我的名字和头像';
+
+  @override
+  String get shareLinkUpdateFailed => '无法保存该设置';
+
+  @override
+  String shareLinkViews(num count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count 次访问',
+      one: '1 次访问',
+      zero: '暂无访问',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get shareLinkWarning => '任何拿到此链接的人都能阅读完整对话记录，包括代理输出过的文件内容或凭据。';
+
+  @override
   String get shareOptionsSheetCopiedToClipboard => '内容已复制到剪贴板';
 
   @override

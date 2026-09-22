@@ -9,6 +9,7 @@ import '/custom_code/utils/vibing_messages.dart';
 import '/pages/common/session_actions.dart';
 import '/pages/message_selection_sheet/message_selection_sheet_widget.dart';
 import '/pages/share_options_sheet/share_options_sheet_widget.dart';
+import '/pages/share_session_sheet/share_session_sheet_widget.dart';
 import '/pages/agent_chat/components/slash_commands.dart';
 import '/pages/agent_chat/components/file_mentions.dart';
 import '/constants/slash_commands.dart';
@@ -2511,14 +2512,35 @@ class _AgentChatWidgetState extends State<AgentChatWidget> with RouteAware, Tick
     await SessionActions.showSnack(context, message, waitTime: waitTime);
   }
 
+  /// Share: one sheet, two sections — a live link to this session, and the
+  /// export flow below it. The link only needs the session's id, so this no
+  /// longer refuses to open on a session whose messages have not loaded.
   void _shareConversation() async {
+    logFirebaseEvent('AGENT_CHAT_share_conversation');
+
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      isDismissible: true,
+      enableDrag: true,
+      builder: (context) => ShareSessionSheetWidget(
+        instanceId: widget.instanceId,
+        sessionTitle: _model.instanceData?['name']?.toString() ??
+            widget.instanceData?['name']?.toString(),
+        onExport: _exportConversation,
+      ),
+    );
+  }
+
+  /// Pick messages, then share them as text or as a file — the existing
+  /// export flow, reached from the share sheet's Export section.
+  Future<void> _exportConversation() async {
     if (_model.messages.isEmpty) {
       await _showSnackBarMessage(AppLocalizations.of(context).agentChatNoMessagesToShare);
       return;
     }
 
-    logFirebaseEvent('AGENT_CHAT_share_conversation');
-    
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,

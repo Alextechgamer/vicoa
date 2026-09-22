@@ -878,6 +878,71 @@
   "sessionListDeleted": "Session deleted successfully",
   "setupReminderNotificationBody": "Download the Vicoa desktop app on your computer and sign in — start using Claude Code, Codex, and OpenCode on the go.",
   "setupReminderNotificationTitle": "Bring coding agents to your phone 🚀",
+  "shareLinkAudience": "Who can open it",
+  "shareLinkAudienceAuthenticated": "Vicoa users only",
+  "shareLinkAudiencePublic": "Anyone with the link",
+  "shareLinkCopied": "Link copied",
+  "shareLinkCreate": "Create share link",
+  "shareLinkCreateFailed": "Couldn't create the link",
+  "shareLinkCreating": "Creating link…",
+  "shareLinkDescription": "Anyone who opens this link follows this session live, and keeps seeing what happens next until you revoke it.",
+  "shareLinkExpired": "Expired",
+  "shareLinkExpiresOn": "Expires {date}",
+  "@shareLinkExpiresOn": {
+    "description": "When the link stops working.",
+    "placeholders": {
+      "date": {
+        "type": "String"
+      }
+    }
+  },
+  "shareLinkExpiry": "Expires",
+  "shareLinkExpiryInDays": "{count, plural, =1{In 1 day} other{In {count} days}}",
+  "@shareLinkExpiryInDays": {
+    "description": "Expiry option: how long from now the link stays live.",
+    "placeholders": {
+      "count": {
+        "type": "num"
+      }
+    }
+  },
+  "shareLinkExpiryNever": "Never",
+  "shareLinkExportRow": "Export messages",
+  "shareLinkExportSubtitle": "Pick messages, then share them as text or a file",
+  "shareLinkLoadFailed": "Couldn't load share links",
+  "shareLinkNeverExpires": "Never expires",
+  "shareLinkOtherLinks": "{count, plural, =1{1 other link} other{{count} other links}}",
+  "@shareLinkOtherLinks": {
+    "description": "Header for the links on this session other than the newest.",
+    "placeholders": {
+      "count": {
+        "type": "num"
+      }
+    }
+  },
+  "shareLinkPreview": "Preview as a visitor",
+  "shareLinkRetry": "Try again",
+  "shareLinkRevoke": "Revoke link",
+  "shareLinkRevokeContent": "Anyone who already has the link loses access.",
+  "shareLinkRevokeFailed": "Couldn't revoke the link",
+  "shareLinkRevokeTitle": "Revoke link?",
+  "shareLinkSectionExport": "Export",
+  "shareLinkSectionLink": "Link",
+  "shareLinkSettings": "Link settings",
+  "shareLinkSheetTitle": "Share",
+  "shareLinkShowBranch": "Show branch names",
+  "shareLinkShowOwner": "Show my name and avatar",
+  "shareLinkUpdateFailed": "Couldn't save that setting",
+  "shareLinkViews": "{count, plural, =0{No views} =1{1 view} other{{count} views}}",
+  "@shareLinkViews": {
+    "description": "How many times the link has been opened.",
+    "placeholders": {
+      "count": {
+        "type": "num"
+      }
+    }
+  },
+  "shareLinkWarning": "Anyone with this link can read the full transcript, including any file contents or credentials the agent printed.",
   "shareOptionsSheetCopiedToClipboard": "Content copied to clipboard",
   "shareOptionsSheetCopyToClipboard": "Copy to clipboard",
   "shareOptionsSheetShareAs": "Share as",

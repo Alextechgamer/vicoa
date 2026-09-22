@@ -57,6 +57,7 @@ export 'api_update_task.dart' show apiUpdateTask;
 export 'api_delete_task.dart' show apiDeleteTask;
 export 'api_get_projects.dart' show apiGetProjects;
 export 'api_get_task_labels.dart' show apiGetTaskLabels;
+export 'api_shares.dart' show apiListShareLinks, apiCreateSessionShareLink, apiUpdateShareLink, apiRevokeShareLink, shareLinkUrl, getVicoaWebBaseUrl;
 export 'api_automations.dart'
     show
         apiGetAutomations,
