@@ -1,56 +1,63 @@
 # Cutover qualification
 
-Checked on 2026-09-23 against `feat/unified-control-plane`. PASS means a command or browser produced the result. Source existing is not PASS.
+Checked on 2026-09-23 after both isolated homes were signed in. PASS means a command produced the result. A class existing in source is not PASS.
+
+Starting commit: `97cac2f`.
 
 | Gate | Result | Evidence |
 |---|---|---|
-| Postgres persistence | PASS | Revision `a8c1e4b72d09` upgraded, downgraded, and upgraded again on local database `vicoa_control_plane`. A second connection read the written task and queued message. |
-| Migration import | PASS | Read-only snapshot import test. Live path is refused. Imported jobs stay shadowed. |
-| LocalWorker | PASS | `test_local_worker.py` created a real git worktree and ran a local process. |
-| Real AntigravitySession | BLOCKED | `agy` has no profile flag. New homes have no `.gemini` state. Signing in would be an owner action. `AntigravitySession.start()` was not called. |
-| agy account #1 | BLOCKED | `/home/alex/.vicoa/runtimes/vicoa-agy-1` exists and is empty. Not signed in. |
-| agy account #2 | BLOCKED | `/home/alex/.vicoa/runtimes/vicoa-agy-2` exists and is empty. Not signed in. |
-| Simultaneous same-provider profiles | BLOCKED | No authenticated pair to launch. Routing around a drained disposable profile passed in `test_profiles.py`. |
-| Worktree isolation | PASS | Local canary worktree was not the live project checkout. |
-| DAG | PASS | Local A did not unlock B until verification passed. Not proven on Antigravity. |
-| Deterministic verification | PASS | File and marker checks passed in the local canary. |
-| Failed verification | PASS | Wrong marker stayed `revision_required` and did not start the next task. |
-| Message queue | PASS | HTTP and store tests left a prompt `queued` until the worker was accepting. |
-| Acknowledgement | PASS | Local canary moved one message to `acknowledged` only after an explicit ack. |
-| Approvals | PASS | Approve-once did not create a standing allow rule unless `confirm_permanent` was set. |
-| Restart recovery | PASS | Running local worker became `interrupted`. No second worker started. |
-| Quota routing | PASS | Missing percentage stayed null. Conserve-constrained account was not selected when a healthier one existed. |
-| Account failure isolation | PASS | Draining `vicoa-agy-1` left `vicoa-agy-2` routable. |
-| MCP | PASS | FastAPI TestClient hit the real router: status, create, claim, heartbeat-safe claim, shell rejected, protected message rejected. |
-| Portfolio UI desktop | BLOCKED | Chrome opened `http://127.0.0.1:3010/dashboard/portfolio`. The existing root auth gate crashed first: Supabase URL and key are not configured. The portfolio cards did not render. |
-| Portfolio UI mobile | BLOCKED | Same Supabase gate at 390x844. Overflow of that error overlay is not a portfolio layout result. |
-| Protected tasks | PASS | Fixture refused message, route, kill, reap, and approve. Live task 6 was not used. |
-| Imported jobs | PASS | Import hold and shadow mode kept imported tasks from starting. |
-| Credential isolation | PASS | Status JSON did not include the runtime path. Provisioning copied zero credential files. |
-| Production boundary | PASS | Live task 6 still paused. Jobs 70 and 71 still planned. Four live services still active. |
-| Test suite | PASS | 27 passed, 0 failed, 0 skipped. |
-| Lint | PASS | Ruff issues introduced in this package were fixed. `row.keys()` remains because `sqlite3.Row` iteration yields values, not keys. Prettier is not a dependency of `apps/web`; its lint script is `tsc`. |
-| Secret scan | PASS | gitleaks 8.28.0 scanned the control-plane sources and docs. No leaks found. |
+| Postgres | PASS | Revision `a8c1e4b72d09` upgraded, downgraded, and upgraded again on local `vicoa_control_plane`. |
+| migration | PASS | Read-only snapshot import. Live database path is refused. |
+| persistence | PASS | A second connection read the row written by the first. |
+| LocalWorker | PASS | Earlier disposable worktree canary. Not used as a substitute for the rows below. |
+| AntigravitySession.start | PASS | Real `start()` on `/home/alex/.local/bin/agy`. Example conversation `711e83a9-2e7d-43e6-aa76-d91ee407a650`. |
+| vicoa-agy-1 | PASS | `agy1-canary.txt` is exactly `VICOA-AGY-1-OK`. Token file exists. No secret printed. |
+| vicoa-agy-2 | PASS | `sim-2/agy2-canary.txt` is exactly `VICOA-AGY-2-OK`. Token hash differs from agy-1. |
+| simultaneous same-provider accounts | PASS | Conversations `808e9fc4-184d-4dc6-b014-02ffe4698942` and `64957a9b-822c-4999-89c5-efcd8412b6a2`. PIDs `1317108` and `1317156`. |
+| credential isolation | PASS | Separate token files. Hashes differ. Contents not printed. |
+| session isolation | PASS | Distinct conversation ids and process ids. |
+| worktree isolation | PASS | Markers landed in the disposable repo passed as `cwd`, not in `/opt/projects` or `/home/agentctl`. |
+| real A->B->C DAG | PASS | B blocked before A. After A finished, B stayed locked until verification passed. Same for C. Files contain `A-VERIFIED`, `B-VERIFIED`, `C-VERIFIED`. |
+| failed verification | PASS | Wrong marker stayed `revision_required`. Dependent task returned `dependency`. |
+| message queue | PASS | Three messages stayed `queued` until the worker was accepting. |
+| message acknowledgement | PASS | One became `acknowledged` only after `AntigravitySession.deliver_user_message` returned. The other two stayed `queued`. |
+| approvals | BLOCKED | Default-mode `AntigravitySession` did not present an approval prompt. It wrote `denied.txt`. Headless `agy` has no approval channel to approve once. |
+| restart recovery | PASS | `recover_after_restart` marked the task `interrupted`, kept the same pid, and did not start a second session. |
+| quota routing | BLOCKED | No fresh percentage was observed. Missing telemetry was not stored as 0. Pool routing refused every account instead of guessing. |
+| account failure isolation | PASS | MCP drain of `agy-a` routed the next disposable task to `agy-b`. |
+| MCP | PASS | Real router: status, quota, job, claim, heartbeat, DAG, profiles, blockers, approve once, deny, drain, enable. Shell, SQL, and process kill returned 403. No standing allow rule. |
+| portfolio UI desktop | BLOCKED | Chrome reached the Supabase sign-in gate. No local Supabase URL or key exists, and Docker is not running. |
+| portfolio UI mobile | BLOCKED | Same gate at 390px. |
+| protected tasks | PASS | Fixture refusal in the control-plane suite. Live task 6 was not used. |
+| imported jobs | PASS | Snapshot import remains held. Jobs 70 and 71 were not released. |
+| task-6 preservation | PASS | Still `paused` on `agy-2`, verification `pending`. |
+| jobs 70/71 preservation | PASS | Both still `planned`. Queued prompts were not delivered. |
+| production boundaries | PASS | No live service was stopped. No production Supabase or paid render was used. |
+| tests | PASS | 27 passed, 0 failed, 0 skipped. |
+| Ruff | PASS | `ruff check` on the control-plane Python is clean. |
+| TypeScript | PASS | `pnpm exec tsc --noEmit` in `apps/web` exited 0. |
+| secret scan | PASS | gitleaks 8.28.0 found no leaks in the control-plane tree. |
 
-## Retirement
+## Not eligible for cutover
 
-NOT ELIGIBLE — OWNER AUTHENTICATION REQUIRED
+The live approval prompt and the portfolio page were not proven. Fresh quota percentages were not observed. Do not stop Agent Control.
 
-The owner action is in `docs/control-plane/OWNER-AUTH.md`. Do not stop the old services before both new homes are signed in and a disposable `AntigravitySession` canary passes.
+## Prepared, not executed
 
-## Reversible cutover, not executed
+1. Copy `/opt/agent-control/state/agent-control.db` to a timestamped snapshot.
+2. Read task 6 and confirm it is still paused.
+3. Read jobs 70 and 71 and confirm they are still held.
+4. Stop new dispatch on the old orchestrator only after the owner says so.
+5. Confirm no second worker is attached to task 6, 113, or 114.
+6. Start Vicoa with `VICOA_CONTROL_PLANE_TOKEN` set and a new database, not the live Agent Control file.
+7. Import the snapshot. Leave `shadow=1`.
+8. Do not release task 6 or jobs 70 and 71.
+9. Confirm `vicoa-agy-1` and `vicoa-agy-2` still have separate token files.
+10. Call MCP `status` and confirm shell is rejected.
+11. Open `/dashboard/portfolio` only after local auth is configured.
+12. Watch one harmless disposable job before any live job moves.
+13. Retirement order, later: orchestrator, then reaper, then API, then MCP. Not in this run.
+14. Roll back if a live task changes state, a second worker appears, or an imported job starts.
+15. Rollback is: stop the new Vicoa process, leave the four old services running, and do not delete the snapshot.
 
-1. Snapshot `/opt/agent-control/state/agent-control.db` again.
-2. Confirm task 6 is still paused on `agy-2`.
-3. Stop new dispatch on the old orchestrator only after the owner says so. Do not stop it in this run.
-4. Leave jobs 70 and 71 held.
-5. Import only a fresh read-only snapshot into the Vicoa control plane. Keep `shadow=1`.
-6. Start Vicoa worker ownership only for a new disposable task, not task 6 or jobs 70/71.
-7. Confirm `vicoa-agy-1` and `vicoa-agy-2` have separate `HOME/.gemini` trees.
-8. Call the control-plane MCP status and claim tools. Confirm claim does not start workers.
-9. Open `/dashboard/portfolio` with the real Supabase session and confirm the cards.
-10. Confirm no second worker was started for an imported session.
-11. Watch one disposable cycle.
-12. Only later stop `agent-control`, `agent-orchestrator`, `agent-reaper`, and `agent-mcp`.
-
-Rollback: leave the old services running, drop the Vicoa control-plane tables from the migration downgrade, and delete only `/home/alex/.vicoa/runtimes/vicoa-agy-*` if those sign-ins should be discarded. Do not delete `/home/agentctl/runtimes`.
+Do not run that list until the owner says so.

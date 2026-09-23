@@ -8,7 +8,7 @@ It does not wrap the live Agent Control process, and it does not replace it yet.
 - Fork: `https://github.com/Alextechgamer/vicoa`
 - Branch: `feat/unified-control-plane`
 - Upstream remote: `vicoa-ai/vicoa`
-- Control-plane tests: 27 passed, 0 failed. Includes the HTTP router canary and isolated-profile refusal of live homes.
+- Control-plane tests: 27 passed, 0 failed. Real AntigravitySession canaries are recorded in `docs/control-plane/CUTOVER-QUALIFICATION.md`.
 - Harmless canary: local files only, two profile records, no paid API
 - Snapshot import: 71 jobs, 114 tasks, 2 accounts, 0 tasks started
 
