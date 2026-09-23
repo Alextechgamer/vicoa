@@ -12,8 +12,13 @@ export default function PortfolioPage() {
 
   useEffect(() => {
     let cancelled = false;
-    getBackendAPI()
-      .controlPlaneStatus()
+    fetch('/api/control-plane/status')
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error(`control plane status ${response.status}`);
+        }
+        return response.json() as Promise<Status>;
+      })
       .then((value) => {
         if (!cancelled) setStatus(value);
       })

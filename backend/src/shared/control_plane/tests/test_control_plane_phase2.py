@@ -157,6 +157,7 @@ def test_postgres_migration_roundtrip() -> None:
     dsn = os.environ.get("VICOA_CONTROL_PLANE_PG", "postgresql://alex@/vicoa_control_plane")
     pytest.importorskip("psycopg2")
     import importlib.util
+
     import psycopg2
     from alembic.migration import MigrationContext
     from alembic.operations import Operations
@@ -164,7 +165,7 @@ def test_postgres_migration_roundtrip() -> None:
 
     try:
         psycopg2.connect(dsn).close()
-    except Exception as exc:
+    except psycopg2.Error as exc:
         pytest.skip(f"local postgres unavailable: {exc}")
     engine = create_engine(dsn.replace("postgresql://", "postgresql+psycopg2://", 1))
     revision_path = Path(__file__).resolve().parents[2] / "alembic" / "versions" / "a8c1e4b72d09_control_plane_tables.py"

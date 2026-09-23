@@ -298,7 +298,7 @@ class ControlPlane:
         return [self._public_account(row) for row in rows]
 
     def _public_account(self, row: sqlite3.Row) -> dict[str, Any]:
-        data = {key: row[key] for key in row.keys() if key != "runtime_home"}
+        data = {key: row[key] for key in row.keys() if key != "runtime_home"}  # noqa: SIM118
         data["runtime_home_set"] = bool(row["runtime_home"])
         data["runtime_home_hash"] = hashlib.sha256(row["runtime_home"].encode()).hexdigest()[:12]
         data["constraint_reason"] = redact(row["constraint_reason"])

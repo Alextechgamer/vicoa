@@ -7,6 +7,7 @@ PostgreSQL so persistence tests use a real server, not a mock.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import Self
 
 
 def postgres_statements(schema: str) -> list[str]:
@@ -67,7 +68,7 @@ class PgConnection:
     def __init__(self, raw) -> None:
         self.raw = raw
 
-    def __enter__(self) -> "PgConnection":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> bool:
@@ -92,12 +93,14 @@ class PgConnection:
 
 
 def _lastval(raw) -> int | None:
+    import psycopg2
+
     raw.cursor().execute("SAVEPOINT cp_lastid")
     try:
         cur = raw.cursor()
         cur.execute("SELECT lastval()")
         value = cur.fetchone()[0]
-    except Exception:
+    except psycopg2.Error:
         raw.cursor().execute("ROLLBACK TO SAVEPOINT cp_lastid")
         return None
     raw.cursor().execute("RELEASE SAVEPOINT cp_lastid")

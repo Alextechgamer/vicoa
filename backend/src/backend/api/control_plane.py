@@ -15,7 +15,11 @@ from typing import Any
 from fastapi import APIRouter, Header, HTTPException
 
 from shared.control_plane.mcp_surface import dispatch
-from shared.control_plane.store import LIVE_AGENT_CONTROL_DB, ControlPlane, ControlPlaneError
+from shared.control_plane.store import (
+    LIVE_AGENT_CONTROL_DB,
+    ControlPlane,
+    ControlPlaneError,
+)
 
 router = APIRouter(prefix="/control-plane", tags=["control-plane"])
 
@@ -97,6 +101,11 @@ def submit_dag(body: dict[str, Any], authorization: str | None = Header(default=
 @router.post("/tasks/{task_id}/message")
 def message(task_id: int, body: dict[str, Any], authorization: str | None = Header(default=None)) -> dict[str, Any]:
     return _call("message_worker", {"task_id": task_id, "text": body.get("text", "")}, authorization)
+
+
+@router.post("/mcp")
+def mcp(body: dict[str, Any], authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    return _call(str(body.get("tool") or ""), dict(body.get("arguments") or {}), authorization)
 
 
 @router.post("/import")

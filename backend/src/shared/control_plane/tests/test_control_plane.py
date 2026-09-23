@@ -10,7 +10,11 @@ from pathlib import Path
 import pytest
 
 from shared.control_plane.mcp_surface import REJECTED, dispatch
-from shared.control_plane.store import LIVE_AGENT_CONTROL_DB, ControlPlane, ControlPlaneError
+from shared.control_plane.store import (
+    LIVE_AGENT_CONTROL_DB,
+    ControlPlane,
+    ControlPlaneError,
+)
 
 
 def plane(tmp_path: Path) -> ControlPlane:
