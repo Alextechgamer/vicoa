@@ -9,6 +9,7 @@ It does not wrap the live Agent Control process, and it does not replace it yet.
 - Branch: `feat/unified-control-plane`
 - Upstream remote: `vicoa-ai/vicoa`
 Self-host steps: `docs/control-plane/SELF-HOST.md`.
+Executed new-work cutover: `docs/control-plane/CUTOVER-STATUS.md`.
 - Harmless canary: local files only, two profile records, no paid API
 - Snapshot import: 71 jobs, 114 tasks, 2 accounts, 0 tasks started
 

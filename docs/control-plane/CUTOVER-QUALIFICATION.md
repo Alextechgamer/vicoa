@@ -40,7 +40,7 @@ Starting commit: `97cac2f`.
 
 ## Eligible for cutover
 
-Critical gates are proven. Do not execute the cutover in this run.
+Critical gates are proven. New-work authority was transferred at `2026-09-23T21:28:36Z`. See `CUTOVER-STATUS.md`. The four legacy services were not stopped.
 
 Non-critical gaps:
 
