@@ -57,7 +57,7 @@ Imported Vicoa account records named `agy-1` and `agy-2` pointed at the live run
 
 Task 113 has no `BATCHIDEO-BASELINE-READINESS.md`. The paid baseline render remains an owner blocker. Vicoa job 106 records that successor and is not started.
 
-Task 114 has `agent-control-evidence/TILLPRESS-MONOREPO-CURRENT-STATE.md`. Current source still sets `was_active` before signature verification in `class-toc-license.php`. Distribution, checkout, and customer contact remain owner-only. Vicoa job 107 records the successor and was not executed.
+Task 114 has `agent-control-evidence/TILLPRESS-MONOREPO-CURRENT-STATE.md`. The OrderRing activation path now verifies the server payload before recording `was_active`. Tests: `php tests/run.php` passed 924, failed 0. The patch is on `fix/orderring-license-verify-order` and was not deployed. StoreCanvas and OrderBay still have the old ordering; Vicoa jobs 108 and 109 record those successors and were not started.
 
 ## Live session map
 
