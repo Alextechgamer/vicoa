@@ -35,7 +35,7 @@ export default function PortfolioPage() {
       <header>
         <h1 className="text-2xl font-semibold">Portfolio</h1>
         <p className="text-sm text-muted-foreground">
-          Profiles, verification, queued messages, routing, and protected work. Shadow mode does not dispatch imported live work.
+          Profiles, verification, queued messages, routing, and protected work. Vicoa owns new work. Imported Agent Control rows stay held and are not started from this page.
         </p>
       </header>
       {error ? <p className="text-sm text-muted-foreground">{error}</p> : null}

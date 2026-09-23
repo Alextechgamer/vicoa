@@ -1383,6 +1383,8 @@ class ControlPlane:
                     profile=row["profile"] or "default",
                     auth_state="not_copied",
                 )
+            if str(row["runtime_home"] or "").startswith("/home/agentctl"):
+                self.drain(account_id)
         job_map: dict[int, int] = {}
         for row in src.execute("SELECT * FROM jobs ORDER BY id"):
             existing = self._source_job(str(row["id"]))

@@ -44,3 +44,29 @@ All four remain active. All four stay caretakers.
 ## Rollback
 
 Do not kill task 6. To restore old new-work assignment, call the existing enable endpoint for `agy-1` and `agy-2`. Leave the four services running. Do not delete the snapshot. Vicoa’s imported rows stay shadow and held even if old assignment is restored.
+
+## After the authority switch
+
+Checked again at `2026-09-23T22:33:27Z`. No new Agent Control task was created after the switch. Two existing queued tasks logged `No route` because both accounts are draining. Task 114 was reconciled from `working` back to `needs_input` on its existing session. That was not a new assignment.
+
+A new Vicoa job, 104, wrote `POST-CUTOVER-OK` through `vicoa-agy-1` and verified. Agent Control did not receive that job.
+
+Imported Vicoa account records named `agy-1` and `agy-2` pointed at the live runtime homes. They are now drained in the Vicoa database so new routing cannot select them. A route check selected `vicoa-agy-1`.
+
+## Recovered legacy evidence
+
+Task 113 has no `BATCHIDEO-BASELINE-READINESS.md`. The paid baseline render remains an owner blocker. Vicoa job 106 records that successor and is not started.
+
+Task 114 has `agent-control-evidence/TILLPRESS-MONOREPO-CURRENT-STATE.md`. Current source still sets `was_active` before signature verification in `class-toc-license.php`. Distribution, checkout, and customer contact remain owner-only. Vicoa job 107 records the successor and was not executed.
+
+## Live session map
+
+Read-only:
+
+- `agy-1` tmux: `task-113`, needs-input. Process cwd is that worktree.
+- `agy-2` tmux: `task-6` paused, and `task-114` needs-input.
+- The running `agy` processes are the existing 113 and 114 sessions, inside the orchestrator cgroup.
+- Task 6 has a paused Atrium session and no separate new process was started.
+
+113 and 114 can be abandoned later only after confirming task 6 does not share their process. That was not tested by stopping anything.
+
