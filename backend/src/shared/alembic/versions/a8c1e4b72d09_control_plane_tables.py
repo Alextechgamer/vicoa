@@ -23,6 +23,7 @@ TABLES = (
     "allow_rules",
     "route_decisions",
     "events",
+    "account_events",
     "steer_messages",
     "quota_observations",
     "approvals",

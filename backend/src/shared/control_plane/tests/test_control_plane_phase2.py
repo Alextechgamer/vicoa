@@ -180,7 +180,7 @@ def test_postgres_migration_roundtrip() -> None:
                 getattr(revision, direction)()
 
     with engine.begin() as conn:
-        conn.exec_driver_sql("DROP TABLE IF EXISTS allow_rules, route_decisions, events, steer_messages, quota_observations, approvals, verifications, task_dependencies, tasks, jobs, accounts CASCADE")
+        conn.exec_driver_sql("DROP TABLE IF EXISTS allow_rules, route_decisions, events, account_events, steer_messages, quota_observations, approvals, verifications, task_dependencies, tasks, jobs, accounts CASCADE")
     run("upgrade")
     run("downgrade")
     run("upgrade")
@@ -193,4 +193,4 @@ def test_postgres_migration_roundtrip() -> None:
     assert again.task(task["id"])["title"] == "persist"
     assert again.messages(task["id"])[0]["state"] == "queued"
     with engine.begin() as conn:
-        conn.exec_driver_sql("DROP TABLE IF EXISTS allow_rules, route_decisions, events, steer_messages, quota_observations, approvals, verifications, task_dependencies, tasks, jobs, accounts CASCADE")
+        conn.exec_driver_sql("DROP TABLE IF EXISTS allow_rules, route_decisions, events, account_events, steer_messages, quota_observations, approvals, verifications, task_dependencies, tasks, jobs, accounts CASCADE")

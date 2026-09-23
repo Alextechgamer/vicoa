@@ -28,6 +28,11 @@ TOOL_NAMES = (
     "list_approvals",
     "claim_job",
     "heartbeat",
+    "enable_profile",
+    "drain_profile",
+    "job",
+    "profiles",
+    "deny",
 )
 
 REJECTED = frozenset(
@@ -110,6 +115,16 @@ def dispatch(plane: ControlPlane, tool: str, arguments: dict[str, Any] | None = 
         return plane.claim_job(int(args["job_id"]), str(args["manager_id"]))
     if tool == "heartbeat":
         return plane.heartbeat_job(int(args["job_id"]))
+    if tool == "job":
+        return plane.job(int(args["job_id"]))
+    if tool == "profiles":
+        return {"profiles": plane.accounts()}
+    if tool == "drain_profile":
+        return plane.drain(str(args["account_id"]))
+    if tool == "enable_profile":
+        return plane.enable(str(args["account_id"]))
+    if tool == "deny":
+        return plane.deny(int(args["approval_id"]), prompt_text=str(args.get("prompt_text") or ""))
     if tool == "blockers":
         return {"blockers": plane.blockers()}
     if tool == "retry_eligible":

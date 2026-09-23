@@ -45,8 +45,9 @@ export default function PortfolioPage() {
             <CardContent className="flex flex-col gap-2 text-sm">
               {status.accounts.map((account) => (
                 <div key={account.id}>
-                  {account.id} · {account.provider} · {account.auth_state}
+                  {account.id} · {account.provider} · {account.auth_state} · workers {account.active_workers}/{account.max_workers}
                   {account.constrained ? ' · constrained' : ''}
+                  {account.drained ? ' · draining' : ''}
                   {account.enabled ? '' : ' · disabled'}
                 </div>
               ))}
@@ -66,6 +67,38 @@ export default function PortfolioPage() {
                   {job.source_id ? ` · source ${job.source_id}` : ''}
                 </div>
               ))}
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>Tasks</CardTitle>
+              <CardDescription>Worker finished is not verified. Protected and held tasks are not started from this page.</CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-2 text-sm">
+              {status.tasks.length
+                ? status.tasks.map((task) => (
+                    <div key={task.id}>
+                      {task.title} · worker {task.worker_status} · verification {task.verification_status}
+                      {task.protected ? ' · protected' : ''}
+                      {task.owner_only ? ' · owner-only' : ''}
+                      {task.import_hold ? ' · held' : ''}
+                      {task.policy !== 'routine' ? ` · ${task.policy}` : ''}
+                    </div>
+                  ))
+                : 'No tasks.'}
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>Approvals</CardTitle>
+              <CardDescription>Approve once does not create a standing rule. Prompt text is not shown here.</CardDescription>
+            </CardHeader>
+            <CardContent className="text-sm">
+              {status.approvals.length
+                ? status.approvals.map((item) => (
+                    <div key={item.id}>task {item.task_id} · {item.status}{item.permanent ? ' · fingerprint rule' : ''}</div>
+                  ))
+                : 'No approvals.'}
             </CardContent>
           </Card>
           <Card>

@@ -179,6 +179,13 @@ CREATE TABLE IF NOT EXISTS steer_messages(
   updated_at TEXT NOT NULL,
   UNIQUE(task_id, idempotency_key)
 );
+CREATE TABLE IF NOT EXISTS account_events(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  account_id TEXT NOT NULL,
+  action TEXT NOT NULL,
+  detail TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS events(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   task_id INTEGER,
@@ -316,6 +323,31 @@ class ControlPlane:
             if cur.rowcount != 1:
                 raise ControlPlaneError("not_found", f"account {account_id} not found")
         return self.account(account_id)
+
+    def drain(self, account_id: str) -> dict[str, Any]:
+        with self._conn() as db:
+            cur = db.execute("UPDATE accounts SET drained=1 WHERE id=?", (account_id,))
+            if cur.rowcount != 1:
+                raise ControlPlaneError("not_found", f"account {account_id} not found")
+            self._audit(db, account_id, "drain", "")
+        return self.account(account_id)
+
+    def enable(self, account_id: str) -> dict[str, Any]:
+        with self._conn() as db:
+            cur = db.execute(
+                "UPDATE accounts SET enabled=1, drained=0, constrained=0 WHERE id=?",
+                (account_id,),
+            )
+            if cur.rowcount != 1:
+                raise ControlPlaneError("not_found", f"account {account_id} not found")
+            self._audit(db, account_id, "enable", "")
+        return self.account(account_id)
+
+    def _audit(self, db, account_id: str, action: str, detail: str) -> None:
+        db.execute(
+            "INSERT INTO account_events(account_id, action, detail, created_at) VALUES(?,?,?,?)",
+            (account_id, action, redact(detail), _now()),
+        )
 
     def mark_provider_failure(self, account_id: str, reason: str) -> dict[str, Any]:
         with self._conn() as db:
@@ -1273,7 +1305,27 @@ class ControlPlane:
             "blockers": self.blockers(),
             "shadow_jobs": self._shadow_job_ids(),
             "message_states": self._message_states(),
+            "tasks": self.task_board(),
+            "approvals": self.approval_board(),
         }
+
+    def task_board(self) -> list[dict[str, Any]]:
+        with self._conn() as db:
+            rows = db.execute(
+                """
+                SELECT id, title, worker_status, verification_status, account_id, session_id,
+                       protected, owner_only, import_hold, policy, source_id
+                FROM tasks ORDER BY id
+                """
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def approval_board(self) -> list[dict[str, Any]]:
+        with self._conn() as db:
+            rows = db.execute(
+                "SELECT id, task_id, status, permanent, consumed FROM approvals ORDER BY id"
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def import_agent_control(
         self,
@@ -1538,11 +1590,15 @@ def _run_check(root: Path, task: sqlite3.Row, check: dict[str, Any]) -> dict[str
                 return {"type": kind, "passed": False, "summary": "missing file"}
             passed = expected in path.read_text()
             return {"type": kind, "passed": passed, "summary": f"contains={passed}"}
-        if kind == "git_changed":
+        if kind in {"git_changed", "git_changed_path"}:
             return _git_changed(root, task, str(check.get("path") or ""))
+        if kind == "git_diff_nonempty":
+            changed = _git_changed(root, task, ".")
+            changed["type"] = kind
+            return changed
         if kind == "command":
             return _command(root, check)
-        if kind == "worker_output":
+        if kind in {"worker_output", "output_contains"}:
             expected = str(check.get("contains") or "")
             passed = expected in (task["worker_output"] or "")
             return {"type": kind, "passed": passed, "summary": f"output_contains={passed}"}

@@ -8,7 +8,7 @@ It does not wrap the live Agent Control process, and it does not replace it yet.
 - Fork: `https://github.com/Alextechgamer/vicoa`
 - Branch: `feat/unified-control-plane`
 - Upstream remote: `vicoa-ai/vicoa`
-- Control-plane tests: 18 passed, including a real local Postgres upgrade, downgrade, and re-upgrade of revision `a8c1e4b72d09`
+- Control-plane tests: 24 passed, including local worktree canaries and the Postgres revision round-trip
 - Harmless canary: local files only, two profile records, no paid API
 - Snapshot import: 71 jobs, 114 tasks, 2 accounts, 0 tasks started
 
