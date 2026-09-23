@@ -252,6 +252,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get agentChatErrorLoadingMessages => 'Error Loading Messages';
 
   @override
+  String get agentChatForkFromHere => 'Fork from here';
+
+  @override
   String get agentChatInitFailed => 'Failed to initialize chat';
 
   @override
@@ -1377,6 +1380,39 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get newSessionCurrentBranch => 'Current branch';
+
+  @override
+  String get newSessionForkChipTitle => 'Chat history';
+
+  @override
+  String newSessionForkFrom(String title) {
+    return 'From $title';
+  }
+
+  @override
+  String newSessionForkMessages(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count messages',
+      one: '1 message',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String newSessionForkOmitted(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count earlier messages omitted',
+      one: '1 earlier message omitted',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get newSessionForkRemove => 'Remove chat history';
 
   @override
   String get newSessionLoadingMachines => 'Loading machines...';

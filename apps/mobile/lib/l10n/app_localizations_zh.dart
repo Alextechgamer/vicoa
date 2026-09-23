@@ -245,6 +245,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get agentChatErrorLoadingMessages => '加载消息出错';
 
   @override
+  String get agentChatForkFromHere => '从这里分叉出新任务';
+
+  @override
   String get agentChatInitFailed => '初始化对话失败';
 
   @override
@@ -1323,6 +1326,37 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get newSessionCurrentBranch => '当前分支';
+
+  @override
+  String get newSessionForkChipTitle => '对话记录';
+
+  @override
+  String newSessionForkFrom(String title) {
+    return '来自 $title';
+  }
+
+  @override
+  String newSessionForkMessages(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count 条消息',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String newSessionForkOmitted(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '已省略较早的 $count 条',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get newSessionForkRemove => '移除对话记录';
 
   @override
   String get newSessionLoadingMachines => '正在加载机器…';

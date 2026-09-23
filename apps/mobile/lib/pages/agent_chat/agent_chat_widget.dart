@@ -6,6 +6,8 @@ import '/l10n/app_localizations.dart';
 import '/flutter_flow/custom_functions.dart' as functions;
 import '/custom_code/widgets/index.dart' as custom_widgets;
 import '/custom_code/utils/vibing_messages.dart';
+import '/custom_code/utils/fork_transcript.dart';
+import '/custom_code/utils/message_time.dart';
 import '/pages/common/session_actions.dart';
 import '/pages/message_selection_sheet/message_selection_sheet_widget.dart';
 import '/pages/share_options_sheet/share_options_sheet_widget.dart';
@@ -626,7 +628,7 @@ class _AgentChatWidgetState extends State<AgentChatWidget> with RouteAware, Tick
       return null;
     }
 
-    final messageDate = DateTime.tryParse(timestamp);
+    final messageDate = parseMessageTimestamp(timestamp);
     if (messageDate == null) {
       return null;
     }
@@ -642,7 +644,7 @@ class _AgentChatWidgetState extends State<AgentChatWidget> with RouteAware, Tick
       return formattedDate;
     }
 
-    final previousDate = DateTime.tryParse(previousTimestamp);
+    final previousDate = parseMessageTimestamp(previousTimestamp);
     if (previousDate == null) {
       return formattedDate;
     }
@@ -1610,13 +1612,8 @@ class _AgentChatWidgetState extends State<AgentChatWidget> with RouteAware, Tick
     );
   }
 
-  bool _isToolUseMessage(String content) {
-    final t = content.trim();
-    return t.startsWith('Using tool:') ||
-        t.startsWith('🔧 Using tool:') ||
-        t.startsWith('**Exec:**') ||
-        (t.contains('✏️ Applying patch to') && t.contains('file (+'));
-  }
+  bool _isToolUseMessage(String content) =>
+      custom_widgets.isToolUseContent(content);
 
   /// Whether the message at [index] can be folded into a collapsed tool-use
   /// run. Unlike the border grouping used by the expanded (setting-off) path,
@@ -1936,6 +1933,15 @@ class _AgentChatWidgetState extends State<AgentChatWidget> with RouteAware, Tick
             onTap: () async => await _shareAgentMessagesFromLastUser(message),
             tooltip: AppLocalizations.of(context).agentChatShareResponse,
           ),
+          // The demo session has no machine or folder to fork onto.
+          if (!isWelcomeDemoInstance(widget.instanceId)) ...[
+            const SizedBox(width: 4.0),
+            _buildActionIcon(
+              icon: Icons.alt_route_rounded,
+              onTap: () async => await _forkFromMessage(message),
+              tooltip: AppLocalizations.of(context).agentChatForkFromHere,
+            ),
+          ],
         ],
       ),
     );
@@ -2192,6 +2198,106 @@ class _AgentChatWidgetState extends State<AgentChatWidget> with RouteAware, Tick
       debugPrint('Error sharing messages: $e');
       _showSnackBarMessage(AppLocalizations.of(context).agentChatShareFailed, waitTime: 2000);
     }
+  }
+
+  /// Fork: open the New Session screen carrying the conversation up to this
+  /// agent turn, on the same machine / folder / agent, so the new run picks up
+  /// where this one left off. The block itself is built by
+  /// `utils/fork_transcript.dart`; the whole history is already in
+  /// `_model.messages` (the chat fetches it in one request), so nothing is
+  /// paged in first. Mirrors the dashboard's per-message fork button.
+  Future<void> _forkFromMessage(dynamic currentMessage) async {
+    final messageId = (currentMessage is Map ? currentMessage['id'] : null)?.toString() ?? '';
+    if (messageId.isEmpty) return;
+
+    final transcript = buildForkTranscript(
+      messages: _model.messages,
+      boundaryMessageId: messageId,
+      // The chat's own filters: control commands out, project root stripped.
+      sanitize: (content) => _model.filterProjectRootFromContent(_model.sanitizeMessageContent(content)),
+      sourceTitle: _forkSourceTitle(),
+      sourceDirectory: _forkDirectory(),
+    );
+    if (transcript.messageCount == 0) {
+      await _showSnackBarMessage(AppLocalizations.of(context).agentChatNoMessagesToShare);
+      return;
+    }
+
+    logFirebaseEvent('AGENT_CHAT_fork_session');
+    final forkContext = ForkSessionContext(
+      text: transcript.text,
+      messageCount: transcript.messageCount,
+      omittedCount: transcript.omittedCount,
+      sourceInstanceId: widget.instanceId,
+      sourceTitle: _forkSourceTitle(),
+      machineId: _forkMachineId(),
+      directory: _forkDirectory(),
+      agentType: _forkAgentId(),
+    );
+    if (!mounted) return;
+    final result = await context.pushNamed(
+      NewSessionWidget.routeName,
+      extra: <String, dynamic>{'forkContext': forkContext.toJson()},
+    );
+    // The new-session screen pops its result onto whoever opened it — here,
+    // the session that was forked. Landing back on the old conversation is
+    // never what the fork was for, so open the new one, the same way the home
+    // and task flows do. It stacks above this chat, so back returns to the
+    // point the fork was taken from (useful for a second fork).
+    if (!mounted) return;
+    final newInstanceId = (result is Map ? result['instanceId'] : null)?.toString();
+    if (result is! Map || result['status'] != 'success' || newInstanceId == null || newInstanceId.isEmpty) {
+      return;
+    }
+    await context.pushNamed(
+      AgentChatWidget.routeName,
+      pathParameters: {'instanceId': newInstanceId},
+      extra: <String, dynamic>{
+        'instanceData': result['instanceData'],
+        'hasInitialPrompt': result['hasInitialPrompt'] == true,
+        kTransitionInfoKey: const TransitionInfo(
+          hasTransition: true,
+          transitionType: PageTransitionType.rightToLeft,
+        ),
+      },
+    );
+  }
+
+  dynamic get _forkInstanceData => _model.instanceData ?? widget.instanceData;
+
+  String? _forkSourceTitle() {
+    final name = _forkInstanceData?['name']?.toString().trim();
+    return name == null || name.isEmpty ? null : name;
+  }
+
+  String? _forkMachineId() {
+    final id = _forkInstanceData?['machine_id']?.toString().trim();
+    return id == null || id.isEmpty ? null : id;
+  }
+
+  /// The session's folder, absolute — the new-session screen types it into its
+  /// own folder field, and a `~/…` form would not resolve there.
+  String? _forkDirectory() {
+    final project = _forkInstanceData?['project']?.toString().trim();
+    if (project == null || project.isEmpty) return null;
+    final home = _forkInstanceData?['home_dir']?.toString();
+    final absolute = functions.toAbsolutePath(project, home);
+    return absolute == null || absolute.isEmpty ? project : absolute;
+  }
+
+  /// `session_config.agent` is the catalog id the daemon was spawned with;
+  /// `agent_type_name` is the editable row name and only a fallback (the same
+  /// precedence the session gear uses).
+  String? _forkAgentId() {
+    final config = _forkInstanceData?['session_config'];
+    if (config is Map) {
+      final agent = config['agent']?.toString().trim().toLowerCase();
+      if (agent != null && agent.isNotEmpty) return agent;
+    }
+    final name = (_forkInstanceData?['agent_type_name']?.toString() ?? '')
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9]'), '');
+    return name.isEmpty ? null : name;
   }
 
   /// The list's tail item (see [_tailSlotHeight]). The vibing word sits at
