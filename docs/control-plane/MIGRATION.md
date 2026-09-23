@@ -8,7 +8,7 @@ It does not wrap the live Agent Control process, and it does not replace it yet.
 - Fork: `https://github.com/Alextechgamer/vicoa`
 - Branch: `feat/unified-control-plane`
 - Upstream remote: `vicoa-ai/vicoa`
-- Control-plane tests: 11 passed (`backend/src/shared/control_plane/tests/test_control_plane.py`)
+- Control-plane tests: 18 passed, including a real local Postgres upgrade, downgrade, and re-upgrade of revision `a8c1e4b72d09`
 - Harmless canary: local files only, two profile records, no paid API
 - Snapshot import: 71 jobs, 114 tasks, 2 accounts, 0 tasks started
 
@@ -49,10 +49,11 @@ No new Antigravity session was started. That would spend quota and could touch l
 
 ## Not done, on purpose
 
-- Vicoa Postgres is not running here. Alembic revision `a8c1e4b72d09` is in the repo and was not applied to a server.
-- Old Agent Control is not eligible for retirement. Parity of the live worker loop is not proven.
+- The full Vicoa application migration chain was not applied. Revision `a8c1e4b72d09` was applied, downgraded, and re-applied on local database `vicoa_control_plane`. A row written through the store was readable from a second connection. The test then dropped those tables.
+- Old Agent Control is not eligible for retirement. The live worker loop is still Atrium. No new Antigravity session was started.
 - The control-plane HTTP API is fail-closed until `VICOA_CONTROL_PLANE_TOKEN` is set.
-- Permanent allow rules are fingerprint-scoped and require `confirm_permanent`. A normal approve does not create one.
+- Permanent allow rules are fingerprint-scoped, require `confirm_permanent`, and can be revoked. A normal approve does not create one.
+- Imported jobs stay in shadow mode. Releasing an import hold does not dispatch them while `jobs.shadow=1`.
 
 ## Owner-only
 

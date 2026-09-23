@@ -17,7 +17,7 @@ import re
 import shutil
 import sqlite3
 import subprocess
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -25,9 +25,24 @@ SECRET_RE = re.compile(
     r"(?i)(sk_live_[A-Za-z0-9]+|sk-[A-Za-z0-9_\-]{8,}|Bearer\s+\S+"
     r"|(?:api[_-]?key|token|password|secret|authorization)\s*[=:]\s*\S+)"
 )
-PROTECTED_ACTIONS = frozenset(
-    {"resume", "message", "route", "kill", "reap", "approve", "mutate"}
+PROTECTED_ACTIONS = frozenset({"resume", "message", "route", "kill", "reap", "approve", "mutate"})
+TASK_POLICIES = frozenset(
+    {"routine", "approval_required", "owner_only", "destructive", "paid", "production", "protected"}
 )
+STOP_POLICIES = TASK_POLICIES - {"routine"}
+OWNER_ACTIONS = {
+    "production_deploy": "production",
+    "credential_rotation": "owner_only",
+    "paid_render": "paid",
+    "customer_contact": "owner_only",
+    "plugin_publication": "production",
+    "destructive_migration": "destructive",
+    "protected_mutation": "protected",
+}
+CONSERVE_PCT = 50
+CRITICAL_PCT = 15
+MIN_ADVANTAGE_PCT = 10
+STALE_HOURS = 6
 LIVE_AGENT_CONTROL_DB = Path("/opt/agent-control/state/agent-control.db")
 
 
@@ -78,6 +93,7 @@ CREATE TABLE IF NOT EXISTS jobs(
   source_system TEXT NOT NULL DEFAULT '',
   source_id TEXT NOT NULL DEFAULT '',
   import_hold INTEGER NOT NULL DEFAULT 0 CHECK(import_hold IN (0, 1)),
+  shadow INTEGER NOT NULL DEFAULT 0 CHECK(shadow IN (0, 1)),
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -113,6 +129,7 @@ CREATE TABLE IF NOT EXISTS tasks(
   source_system TEXT NOT NULL DEFAULT '',
   source_id TEXT NOT NULL DEFAULT '',
   acceptance_criteria TEXT NOT NULL DEFAULT '',
+  policy TEXT NOT NULL DEFAULT 'routine',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   UNIQUE(job_id, plan_key)
@@ -143,12 +160,24 @@ CREATE TABLE IF NOT EXISTS approvals(
 CREATE TABLE IF NOT EXISTS quota_observations(
   account_id TEXT NOT NULL,
   pool TEXT NOT NULL,
-  window TEXT NOT NULL,
+  quota_window TEXT NOT NULL,
   value_pct REAL,
   status TEXT NOT NULL,
   source TEXT NOT NULL,
   observed_at TEXT NOT NULL,
-  PRIMARY KEY(account_id, pool, window)
+  PRIMARY KEY(account_id, pool, quota_window)
+);
+CREATE TABLE IF NOT EXISTS steer_messages(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  idempotency_key TEXT NOT NULL,
+  body TEXT NOT NULL,
+  state TEXT NOT NULL CHECK(state IN ('queued', 'sent', 'acknowledged', 'failed')),
+  attempt INTEGER NOT NULL DEFAULT 0,
+  error TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(task_id, idempotency_key)
 );
 CREATE TABLE IF NOT EXISTS events(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -168,6 +197,7 @@ CREATE TABLE IF NOT EXISTS allow_rules(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   scope TEXT NOT NULL,
   fingerprint TEXT NOT NULL,
+  revoked INTEGER NOT NULL DEFAULT 0 CHECK(revoked IN (0, 1)),
   created_at TEXT NOT NULL
 );
 """
@@ -176,11 +206,17 @@ CREATE TABLE IF NOT EXISTS allow_rules(
 class ControlPlane:
     def __init__(self, path: str | Path):
         self.path = str(path)
-        Path(self.path).parent.mkdir(parents=True, exist_ok=True)
+        self.dialect = "postgres" if self.path.startswith("postgresql") else "sqlite"
+        if self.dialect == "sqlite":
+            Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         with self._conn() as db:
             db.executescript(SCHEMA)
 
-    def _conn(self) -> sqlite3.Connection:
+    def _conn(self):
+        if self.dialect == "postgres":
+            from .pg import connect
+
+            return connect(self.path)
         db = sqlite3.connect(self.path)
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA foreign_keys=ON")
@@ -300,6 +336,7 @@ class ControlPlane:
         value_pct: float | None,
         status: str,
         source: str,
+        observed_at: str | None = None,
     ) -> dict[str, Any]:
         if window not in {"weekly", "five_hour"}:
             raise ControlPlaneError("rejected", "window must be weekly or five_hour")
@@ -313,20 +350,20 @@ class ControlPlane:
             db.execute(
                 """
                 INSERT INTO quota_observations(
-                  account_id, pool, window, value_pct, status, source, observed_at
+                  account_id, pool, quota_window, value_pct, status, source, observed_at
                 ) VALUES(?,?,?,?,?,?,?)
-                ON CONFLICT(account_id, pool, window) DO UPDATE SET
+                ON CONFLICT(account_id, pool, quota_window) DO UPDATE SET
                   value_pct=excluded.value_pct,
                   status=excluded.status,
                   source=excluded.source,
                   observed_at=excluded.observed_at
                 """,
-                (account_id, pool, window, value_pct, status, source, _now()),
+                (account_id, pool, window, value_pct, status, source, observed_at or _now()),
             )
             row = db.execute(
                 """
-                SELECT account_id, pool, window, value_pct, status, source, observed_at
-                FROM quota_observations WHERE account_id=? AND pool=? AND window=?
+                SELECT account_id, pool, quota_window, value_pct, status, source, observed_at
+                FROM quota_observations WHERE account_id=? AND pool=? AND quota_window=?
                 """,
                 (account_id, pool, window),
             ).fetchone()
@@ -335,7 +372,7 @@ class ControlPlane:
     def quota(self) -> list[dict[str, Any]]:
         with self._conn() as db:
             rows = db.execute(
-                "SELECT account_id, pool, window, value_pct, status, source, observed_at FROM quota_observations ORDER BY 1,2,3"
+                "SELECT account_id, pool, quota_window, value_pct, status, source, observed_at FROM quota_observations ORDER BY 1,2,3"
             ).fetchall()
         return [dict(row) for row in rows]
 
@@ -547,6 +584,9 @@ class ControlPlane:
                 raise ControlPlaneError("owner_only", "owner-only blocker stops automation")
             if task["import_hold"]:
                 raise ControlPlaneError("import_hold", "imported work is held until the owner releases it")
+            job = db.execute("SELECT shadow FROM jobs WHERE id=?", (task["job_id"],)).fetchone()
+            if job and job["shadow"]:
+                raise ControlPlaneError("shadow", "shadow mode does not dispatch imported live work")
             deps = db.execute(
                 """
                 SELECT upstream.verification_status AS verification_status
@@ -658,7 +698,7 @@ class ControlPlane:
             self._event(db, task_id, f"verification {status}")
         return {"task_id": task_id, "status": status, "verification_status": status, "idempotent": False, "evidence": evidence}
 
-    def route(self, task_id: int, *, override_reason: str = "") -> dict[str, Any]:
+    def route(self, task_id: int, *, override_reason: str = "", pool: str | None = None) -> dict[str, Any]:
         with self._conn() as db:
             task = self._task(db, task_id)
             self._guard(task, "route", override_reason=override_reason)
@@ -667,14 +707,8 @@ class ControlPlane:
             if task["import_hold"]:
                 raise ControlPlaneError("import_hold", "imported work is held")
             accounts = db.execute("SELECT * FROM accounts ORDER BY id").fetchall()
-            chosen = None
-            considered = []
-            for account in accounts:
-                reason = _route_block(account)
-                considered.append({"account_id": account["id"], "eligible": reason is None, "reason": reason or "eligible"})
-                if reason is None and chosen is None:
-                    chosen = account["id"]
-            summary = f"routed to {chosen}" if chosen else "no eligible account"
+            observations = db.execute("SELECT * FROM quota_observations").fetchall()
+            chosen, considered, summary = _choose_account(accounts, observations, pool)
             db.execute(
                 """
                 INSERT INTO route_decisions(task_id, account_id, summary, detail_json, decided_at)
@@ -865,6 +899,197 @@ class ControlPlane:
             self._event(db, task_id, f"session cleaned; evidence kept at {dest}")
         return self.task(task_id)
 
+    def enqueue_message(self, task_id: int, body: str, *, idempotency_key: str) -> dict[str, Any]:
+        if not body.strip() or not idempotency_key.strip():
+            raise ControlPlaneError("rejected", "message body and idempotency key are required")
+        now = _now()
+        with self._conn() as db:
+            task = self._task(db, task_id)
+            self._guard(task, "message")
+            existing = db.execute(
+                "SELECT * FROM steer_messages WHERE task_id=? AND idempotency_key=?",
+                (task_id, idempotency_key),
+            ).fetchone()
+            if existing is not None:
+                return dict(existing)
+            cur = db.execute(
+                """
+                INSERT INTO steer_messages(
+                  task_id, idempotency_key, body, state, attempt, created_at, updated_at
+                ) VALUES(?,?,?, 'queued', 0, ?, ?)
+                """,
+                (task_id, idempotency_key, redact(body), now, now),
+            )
+            self._touch(
+                db,
+                task_id,
+                queued_prompts=int(task["queued_prompts"]) + 1,
+                steer_consumed=0,
+                steer_text=redact(body),
+            )
+            self._event(db, task_id, "steer queued; not delivered")
+            message_id = int(cur.lastrowid)
+        return self.message_row(message_id)
+
+    def message_row(self, message_id: int) -> dict[str, Any]:
+        with self._conn() as db:
+            row = db.execute("SELECT * FROM steer_messages WHERE id=?", (message_id,)).fetchone()
+        if row is None:
+            raise ControlPlaneError("not_found", f"message {message_id} not found")
+        return dict(row)
+
+    def messages(self, task_id: int) -> list[dict[str, Any]]:
+        with self._conn() as db:
+            rows = db.execute(
+                "SELECT * FROM steer_messages WHERE task_id=? ORDER BY id",
+                (task_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def deliver_next(self, task_id: int, *, worker_accepting: bool) -> dict[str, Any]:
+        with self._conn() as db:
+            task = self._task(db, task_id)
+            self._guard(task, "message")
+            row = db.execute(
+                """
+                SELECT * FROM steer_messages
+                WHERE task_id=? AND state='queued'
+                ORDER BY id LIMIT 1
+                """,
+                (task_id,),
+            ).fetchone()
+            if row is None:
+                return {"task_id": task_id, "delivered": False, "reason": "empty"}
+            attempt = int(row["attempt"]) + 1
+            if not worker_accepting or task["worker_status"] not in {"running", "needs_input"}:
+                state = "failed" if attempt >= 3 else "queued"
+                db.execute(
+                    "UPDATE steer_messages SET attempt=?, state=?, error=?, updated_at=? WHERE id=?",
+                    (attempt, state, "worker unavailable", _now(), row["id"]),
+                )
+                self._event(db, task_id, "steer not delivered; worker unavailable")
+                message_id = int(row["id"])
+                delivered = False
+            else:
+                db.execute(
+                    "UPDATE steer_messages SET state='sent', attempt=?, updated_at=? WHERE id=?",
+                    (attempt, _now(), row["id"]),
+                )
+                self._event(db, task_id, "steer sent; waiting for acknowledgement")
+                message_id = int(row["id"])
+                delivered = True
+        row = self.message_row(message_id)
+        row["delivered"] = delivered
+        return row
+
+    def acknowledge_message(self, message_id: int) -> dict[str, Any]:
+        with self._conn() as db:
+            row = db.execute("SELECT * FROM steer_messages WHERE id=?", (message_id,)).fetchone()
+            if row is None:
+                raise ControlPlaneError("not_found", f"message {message_id} not found")
+            if row["state"] == "acknowledged":
+                return dict(row)
+            if row["state"] != "sent":
+                raise ControlPlaneError("state", "only a sent message can be acknowledged")
+            db.execute(
+                "UPDATE steer_messages SET state='acknowledged', updated_at=? WHERE id=?",
+                (_now(), message_id),
+            )
+            remaining = db.execute(
+                "SELECT COUNT(*) AS n FROM steer_messages WHERE task_id=? AND state IN ('queued', 'sent')",
+                (row["task_id"],),
+            ).fetchone()["n"]
+            self._touch(
+                db,
+                int(row["task_id"]),
+                queued_prompts=int(remaining),
+                steer_consumed=0 if remaining else 1,
+            )
+            self._event(db, int(row["task_id"]), "steer acknowledged")
+        return self.message_row(message_id)
+
+    def retry_message(self, message_id: int) -> dict[str, Any]:
+        with self._conn() as db:
+            row = db.execute("SELECT * FROM steer_messages WHERE id=?", (message_id,)).fetchone()
+            if row is None:
+                raise ControlPlaneError("not_found", f"message {message_id} not found")
+            if row["state"] == "queued":
+                return dict(row)
+            if row["state"] != "failed":
+                raise ControlPlaneError("state", "only a failed message can be retried")
+            db.execute(
+                "UPDATE steer_messages SET state='queued', error='', updated_at=? WHERE id=?",
+                (_now(), message_id),
+            )
+            self._event(db, int(row["task_id"]), "failed steer returned to queued; no duplicate row")
+        return self.message_row(message_id)
+
+    def set_policy(self, task_id: int, policy: str) -> dict[str, Any]:
+        if policy not in TASK_POLICIES:
+            raise ControlPlaneError("rejected", f"unknown policy {policy}")
+        with self._conn() as db:
+            self._task(db, task_id)
+            self._touch(db, task_id, policy=policy)
+            self._event(db, task_id, f"policy set to {policy}")
+        return self.task(task_id)
+
+    def require_owner_action(self, task_id: int, action: str) -> None:
+        kind = OWNER_ACTIONS.get(action)
+        if kind is None:
+            raise ControlPlaneError("rejected", f"unknown owner action {action}")
+        raise ControlPlaneError("owner_only", f"OWNER ACTION REQUIRED: {action} ({kind})")
+
+    def revoke_allow_rule(self, rule_id: int) -> dict[str, Any]:
+        with self._conn() as db:
+            cur = db.execute(
+                "UPDATE allow_rules SET revoked=1 WHERE id=? AND revoked=0",
+                (rule_id,),
+            )
+            if cur.rowcount != 1:
+                raise ControlPlaneError("not_found", f"allow rule {rule_id} not found")
+            row = db.execute("SELECT * FROM allow_rules WHERE id=?", (rule_id,)).fetchone()
+        return dict(row)
+
+    def set_shadow(self, job_id: int, enabled: bool) -> dict[str, Any]:
+        with self._conn() as db:
+            cur = db.execute(
+                "UPDATE jobs SET shadow=?, updated_at=? WHERE id=?",
+                (1 if enabled else 0, _now(), job_id),
+            )
+            if cur.rowcount != 1:
+                raise ControlPlaneError("not_found", f"job {job_id} not found")
+        return self.job(job_id)
+
+    def claim_job(self, job_id: int, manager_id: str) -> dict[str, Any]:
+        if not manager_id.strip():
+            raise ControlPlaneError("rejected", "manager id is required")
+        with self._conn() as db:
+            cur = db.execute(
+                "UPDATE jobs SET manager_id=?, updated_at=? WHERE id=? AND manager_id IN ('', ?)",
+                (manager_id, _now(), job_id, manager_id),
+            )
+            if cur.rowcount != 1:
+                raise ControlPlaneError("conflict", "job is owned by another manager")
+        job = self.job(job_id)
+        job["started"] = []
+        return job
+
+    def heartbeat_job(self, job_id: int) -> dict[str, Any]:
+        with self._conn() as db:
+            cur = db.execute("UPDATE jobs SET updated_at=? WHERE id=?", (_now(), job_id))
+            if cur.rowcount != 1:
+                raise ControlPlaneError("not_found", f"job {job_id} not found")
+        return {"job_id": job_id, "started": []}
+
+    def _shadow_job_ids(self) -> list[int]:
+        with self._conn() as db:
+            return [int(row["id"]) for row in db.execute("SELECT id FROM jobs WHERE shadow=1 ORDER BY id")]
+
+    def _message_states(self) -> dict[str, int]:
+        with self._conn() as db:
+            rows = db.execute("SELECT state, COUNT(*) AS n FROM steer_messages GROUP BY state").fetchall()
+        return {row["state"]: int(row["n"]) for row in rows}
+
     def kill(self, task_id: int, *, override_reason: str = "") -> dict[str, Any]:
         with self._conn() as db:
             task = self._task(db, task_id)
@@ -963,8 +1188,8 @@ class ControlPlane:
             rows = db.execute("SELECT * FROM tasks ORDER BY id").fetchall()
         for task in rows:
             task_id = int(task["id"])
-            if task["owner_only"]:
-                stopped.append({"task_id": task_id, "reason": "owner_only"})
+            if task["owner_only"] or task["policy"] in STOP_POLICIES:
+                stopped.append({"task_id": task_id, "reason": "owner_only" if task["owner_only"] else task["policy"]})
                 continue
             if task["protected"] or task["import_hold"]:
                 stopped.append({"task_id": task_id, "reason": "held"})
@@ -1046,6 +1271,8 @@ class ControlPlane:
             "accounts": self.accounts(),
             "jobs": self.jobs(),
             "blockers": self.blockers(),
+            "shadow_jobs": self._shadow_job_ids(),
+            "message_states": self._message_states(),
         }
 
     def import_agent_control(
@@ -1146,6 +1373,10 @@ class ControlPlane:
             if row["task_id"] in task_map and row["depends_on_task_id"] in task_map:
                 self.add_dependency(task_map[row["task_id"]], task_map[row["depends_on_task_id"]])
         src.close()
+        with self._conn() as db:
+            db.execute(
+                "UPDATE jobs SET shadow=1 WHERE source_system='agent-control'"
+            )
         after = source_path.read_bytes()
         if before != after:
             raise ControlPlaneError("source_mutated", "import changed the source snapshot")
@@ -1188,6 +1419,87 @@ def _field(row: sqlite3.Row, name: str, default: str = "") -> str:
     if value is None:
         return default
     return str(value)
+
+
+def _choose_account(accounts, observations, pool: str | None) -> tuple[str | None, list[dict[str, Any]], str]:
+    health = []
+    for account in accounts:
+        reason = _route_block(account)
+        health.append({"account_id": account["id"], "eligible": reason is None, "reason": reason or "eligible"})
+    if pool is None:
+        chosen = next((item["account_id"] for item in health if item["eligible"]), None)
+        summary = f"routed to {chosen}" if chosen else "no eligible account"
+        return chosen, health, summary
+    scores: dict[str, float | None] = {}
+    notes: dict[str, str] = {}
+    for account in accounts:
+        account_id = account["id"]
+        block = _route_block(account)
+        if block:
+            scores[account_id] = None
+            notes[account_id] = block
+            continue
+        rows = [row for row in observations if row["account_id"] == account_id and row["pool"] == pool]
+        if any(row["status"] == "limited_access" for row in rows):
+            scores[account_id] = None
+            notes[account_id] = "limited_access"
+            continue
+        fresh = [row for row in rows if row["value_pct"] is not None and _fresh(row["observed_at"])]
+        stale = [row for row in rows if row["value_pct"] is not None and not _fresh(row["observed_at"])]
+        if not fresh:
+            scores[account_id] = None
+            notes[account_id] = "stale" if stale else "missing"
+            continue
+        scores[account_id] = min(float(row["value_pct"]) for row in fresh)
+        if scores[account_id] < CRITICAL_PCT:
+            notes[account_id] = "critical"
+            scores[account_id] = None
+        elif scores[account_id] < CONSERVE_PCT:
+            notes[account_id] = "conserve"
+        else:
+            notes[account_id] = "fresh"
+    eligible = {key: value for key, value in scores.items() if value is not None and value >= CRITICAL_PCT}
+    conserve = {key: value for key, value in eligible.items() if value < CONSERVE_PCT}
+    preferred = {key: value for key, value in eligible.items() if key not in conserve}
+    chosen = None
+    summary = f"no eligible {pool} account"
+    if preferred:
+        chosen = max(preferred, key=preferred.get)
+        summary = f"selected {chosen} / {pool} because it is above the conserve threshold"
+    elif conserve:
+        best = max(conserve, key=conserve.get)
+        better = [key for key, value in preferred.items() if value >= conserve[best] + MIN_ADVANTAGE_PCT]
+        if better:
+            chosen = better[0]
+            summary = f"selected {chosen} / {pool} because {best} {pool} is conserve-constrained"
+        else:
+            chosen = best
+            summary = f"selected {chosen} / {pool}; conserve-constrained and no healthier alternative"
+    considered = []
+    for account in accounts:
+        account_id = account["id"]
+        considered.append(
+            {
+                "account_id": account_id,
+                "pool": pool,
+                "eligible": account_id == chosen or scores.get(account_id) is not None,
+                "reason": notes.get(account_id, "missing"),
+                "score": scores.get(account_id),
+            }
+        )
+    if chosen and any(notes.get(key) == "conserve" or (scores.get(key) is not None and scores[key] < CONSERVE_PCT and key != chosen) for key in scores):
+        constrained = [key for key, value in scores.items() if value is not None and value < CONSERVE_PCT and key != chosen]
+        if constrained:
+            summary = f"selected {chosen} / {pool} because {constrained[0]} {pool} is conserve-constrained"
+    return chosen, considered, summary
+
+
+def _fresh(observed_at: str) -> bool:
+    try:
+        stamp = datetime.strptime(observed_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return False
+    return datetime.now(timezone.utc) - stamp < timedelta(hours=STALE_HOURS)
 
 
 def _route_block(account: sqlite3.Row) -> str | None:

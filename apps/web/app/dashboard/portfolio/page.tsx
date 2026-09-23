@@ -4,17 +4,7 @@ import { useEffect, useState } from 'react';
 import { getBackendAPI } from '@/lib/backend-api';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 
-type Status = {
-  accounts: Array<{ id: string; enabled: number; constrained: number; auth_state: string }>;
-  jobs: Array<{ id: number; project: string; status: string; import_hold: number; source_id: string }>;
-  health: {
-    stale_sessions: number[];
-    unconsumed_steers: number[];
-    protected_tasks: number[];
-    owner_blockers: Array<{ task_id: number; blocker: string }>;
-  };
-  blockers: Array<{ kind: string; task_id: number; blocker?: string }>;
-};
+type Status = Awaited<ReturnType<ReturnType<typeof getBackendAPI>['controlPlaneStatus']>>;
 
 export default function PortfolioPage() {
   const [status, setStatus] = useState<Status | null>(null);
@@ -24,11 +14,11 @@ export default function PortfolioPage() {
     let cancelled = false;
     getBackendAPI()
       .controlPlaneStatus()
-      .then((next) => {
-        if (!cancelled) setStatus(next as Status);
+      .then((value) => {
+        if (!cancelled) setStatus(value);
       })
-      .catch((err: Error) => {
-        if (!cancelled) setError(err.message || 'Control plane is not reachable');
+      .catch((exc: Error) => {
+        if (!cancelled) setError(exc.message);
       });
     return () => {
       cancelled = true;
@@ -36,36 +26,28 @@ export default function PortfolioPage() {
   }, []);
 
   return (
-    <div className="flex h-full flex-col gap-4 overflow-auto p-6">
-      <div>
-        <h1 className="text-lg font-medium">Portfolio</h1>
+    <main className="mx-auto flex max-w-5xl flex-col gap-4 p-6">
+      <header>
+        <h1 className="text-2xl font-semibold">Portfolio</h1>
         <p className="text-sm text-muted-foreground">
-          Verification-gated jobs, account health, and owner blockers. A worker finishing does not unlock the next task.
+          Profiles, verification, queued messages, routing, and protected work. Shadow mode does not dispatch imported live work.
         </p>
-      </div>
-      {error ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>Control plane</CardTitle>
-            <CardDescription>{error}</CardDescription>
-          </CardHeader>
-          <CardContent className="text-sm text-muted-foreground">
-            The API stays closed until VICOA_CONTROL_PLANE_TOKEN is set. This page does not message live workers.
-          </CardContent>
-        </Card>
-      ) : null}
+      </header>
+      {error ? <p className="text-sm text-muted-foreground">{error}</p> : null}
+      {!status && !error ? <p className="text-sm text-muted-foreground">Loading control-plane status.</p> : null}
       {status ? (
-        <div className="grid gap-4 md:grid-cols-3">
+        <>
           <Card>
             <CardHeader>
-              <CardTitle>Accounts</CardTitle>
-              <CardDescription>Isolated runtime profiles</CardDescription>
+              <CardTitle>Profiles</CardTitle>
+              <CardDescription>Runtime homes stay server-side. A constraint on one profile does not disable another.</CardDescription>
             </CardHeader>
-            <CardContent className="space-y-2 text-sm">
+            <CardContent className="flex flex-col gap-2 text-sm">
               {status.accounts.map((account) => (
-                <div key={account.id} className="flex justify-between">
-                  <span>{account.id}</span>
-                  <span>{account.constrained ? 'constrained' : account.enabled ? 'enabled' : 'disabled'}</span>
+                <div key={account.id}>
+                  {account.id} · {account.provider} · {account.auth_state}
+                  {account.constrained ? ' · constrained' : ''}
+                  {account.enabled ? '' : ' · disabled'}
                 </div>
               ))}
             </CardContent>
@@ -73,37 +55,49 @@ export default function PortfolioPage() {
           <Card>
             <CardHeader>
               <CardTitle>Jobs</CardTitle>
-              <CardDescription>Imported work stays held</CardDescription>
+              <CardDescription>Import holds and shadow jobs are not started from this page.</CardDescription>
             </CardHeader>
-            <CardContent className="space-y-2 text-sm">
-              {status.jobs.length === 0 ? <p>No jobs yet.</p> : null}
+            <CardContent className="flex flex-col gap-2 text-sm">
               {status.jobs.map((job) => (
-                <div key={job.id} className="flex justify-between gap-3">
-                  <span className="truncate">{job.project}</span>
-                  <span>{job.import_hold ? 'held' : job.status}</span>
+                <div key={job.id}>
+                  {job.project} · {job.status}
+                  {job.import_hold ? ' · held' : ''}
+                  {job.shadow ? ' · shadow' : ''}
+                  {job.source_id ? ` · source ${job.source_id}` : ''}
                 </div>
               ))}
             </CardContent>
           </Card>
           <Card>
             <CardHeader>
-              <CardTitle>Blockers</CardTitle>
-              <CardDescription>Owner-only stops automation</CardDescription>
+              <CardTitle>Queued messages</CardTitle>
+              <CardDescription>Queued is not delivered. Sent is not acknowledged.</CardDescription>
             </CardHeader>
-            <CardContent className="space-y-2 text-sm">
-              <p>Stale sessions: {status.health.stale_sessions.length}</p>
-              <p>Unconsumed steering: {status.health.unconsumed_steers.length}</p>
-              <p>Protected: {status.health.protected_tasks.length}</p>
-              {status.blockers.map((blocker) => (
-                <p key={`${blocker.kind}-${blocker.task_id}`}>
-                  {blocker.kind} {blocker.task_id}
-                  {blocker.blocker ? `: ${blocker.blocker}` : ''}
-                </p>
-              ))}
+            <CardContent className="text-sm">
+              {Object.entries(status.message_states).length
+                ? Object.entries(status.message_states).map(([state, count]) => (
+                    <div key={state}>{state}: {count}</div>
+                  ))
+                : 'No steer messages in this control-plane database.'}
             </CardContent>
           </Card>
-        </div>
+          <Card>
+            <CardHeader>
+              <CardTitle>Blockers</CardTitle>
+              <CardDescription>Owner-only, protected, unconsumed steer, and stale session.</CardDescription>
+            </CardHeader>
+            <CardContent className="text-sm">
+              {status.blockers.length
+                ? status.blockers.map((item) => (
+                    <div key={`${item.kind}-${item.task_id}`}>{item.kind} · task {item.task_id}</div>
+                  ))
+                : 'No blockers.'}
+              <div className="mt-2">Shadow jobs: {status.shadow_jobs.join(', ') || 'none'}</div>
+              <div>Protected: {status.health.protected_tasks.join(', ') || 'none'}</div>
+            </CardContent>
+          </Card>
+        </>
       ) : null}
-    </div>
+    </main>
   );
 }

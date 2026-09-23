@@ -1892,10 +1892,12 @@ class BackendAPI {
   }
 
   async controlPlaneStatus(): Promise<{
-    accounts: Array<{ id: string; enabled: number; constrained: number; auth_state: string }>;
-    jobs: Array<{ id: number; project: string; status: string; import_hold: number; source_id: string }>;
-    health: { stale_sessions: number[]; unconsumed_steers: Array<{ task_id: number; queued_prompts: number }> };
-    blockers: Array<{ task_id: number; reason: string }>;
+    accounts: Array<{ id: string; enabled: number; constrained: number; auth_state: string; provider: string }>;
+    jobs: Array<{ id: number; project: string; status: string; import_hold: number; shadow: number; source_id: string }>;
+    health: { stale_sessions: number[]; unconsumed_steers: number[]; protected_tasks: number[]; owner_blockers: Array<{ task_id: number; blocker: string }> };
+    blockers: Array<{ kind: string; task_id: number; reason?: string }>;
+    shadow_jobs: number[];
+    message_states: Record<string, number>;
   }> {
     return this.request('/api/v1/control-plane/status');
   }

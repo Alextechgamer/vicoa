@@ -23,6 +23,11 @@ TOOL_NAMES = (
     "message_worker",
     "blockers",
     "retry_eligible",
+    "tasks",
+    "routing",
+    "list_approvals",
+    "claim_job",
+    "heartbeat",
 )
 
 REJECTED = frozenset(
@@ -34,6 +39,9 @@ REJECTED = frozenset(
         "read_file",
         "write_file",
         "raw_fs",
+        "process_kill",
+        "kill_process",
+        "shell_exec",
     }
 )
 
@@ -85,7 +93,23 @@ def dispatch(plane: ControlPlane, tool: str, arguments: dict[str, Any] | None = 
                 plane.add_dependency(keys[str(spec["key"])], keys[str(dep)])
         return {"job_id": job["id"], "task_ids": created}
     if tool == "message_worker":
-        return plane.message(int(args["task_id"]), str(args.get("text") or ""))
+        return plane.enqueue_message(
+            int(args["task_id"]),
+            str(args.get("text") or ""),
+            idempotency_key=str(args.get("idempotency_key") or args.get("text") or ""),
+        )
+    if tool == "tasks":
+        return {"tasks": plane.tasks()}
+    if tool == "routing":
+        return plane.route(int(args["task_id"]), pool=args.get("pool"))
+    if tool == "list_approvals":
+        with plane._conn() as db:
+            rows = db.execute("SELECT id, task_id, status, permanent, consumed FROM approvals ORDER BY id").fetchall()
+        return {"approvals": [dict(row) for row in rows]}
+    if tool == "claim_job":
+        return plane.claim_job(int(args["job_id"]), str(args["manager_id"]))
+    if tool == "heartbeat":
+        return plane.heartbeat_job(int(args["job_id"]))
     if tool == "blockers":
         return {"blockers": plane.blockers()}
     if tool == "retry_eligible":
