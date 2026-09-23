@@ -1349,6 +1349,11 @@ class MachineDaemon:
                 "--name",
                 "OpenCode",
             ]
+            # Pass the resolved path, not the bare name: the child inherits
+            # this daemon's PATH, which is exactly the one that could not find
+            # an installer-placed binary in the first place.
+            if opencode_cli := _find_cli_in_common_locations("opencode"):
+                cmd.extend(["--opencode-command", opencode_cli])
             if session_id:
                 cmd.extend(["--session-id", session_id])
             agent_mode = self._extract_opencode_mode(metadata)
