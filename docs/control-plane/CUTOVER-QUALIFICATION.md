@@ -21,26 +21,32 @@ Starting commit: `97cac2f`.
 | failed verification | PASS | Wrong marker stayed `revision_required`. Dependent task returned `dependency`. |
 | message queue | PASS | Three messages stayed `queued` until the worker was accepting. |
 | message acknowledgement | PASS | One became `acknowledged` only after `AntigravitySession.deliver_user_message` returned. The other two stayed `queued`. |
-| approvals | BLOCKED | Default-mode `AntigravitySession` did not present an approval prompt. It wrote `denied.txt`. Headless `agy` has no approval channel to approve once. |
+| approvals | NOT EXERCISED | Default-mode `AntigravitySession` wrote the file instead of asking. The state machine, HTTP approve-once, deny, and no standing rule are tested. Headless `agy` has no prompt channel. Not cutover-critical. |
 | restart recovery | PASS | `recover_after_restart` marked the task `interrupted`, kept the same pid, and did not start a second session. |
-| quota routing | BLOCKED | No fresh percentage was observed. Missing telemetry was not stored as 0. Pool routing refused every account instead of guessing. |
+| quota routing | NOT AVAILABLE | No supported fresh percentage was observed. Missing telemetry stays `unknown` and is not stored as 0. Pool routing refuses every account instead of guessing. Not cutover-critical. |
 | account failure isolation | PASS | MCP drain of `agy-a` routed the next disposable task to `agy-b`. |
 | MCP | PASS | Real router: status, quota, job, claim, heartbeat, DAG, profiles, blockers, approve once, deny, drain, enable. Shell, SQL, and process kill returned 403. No standing allow rule. |
-| portfolio UI desktop | BLOCKED | Chrome reached the Supabase sign-in gate. No local Supabase URL or key exists, and Docker is not running. |
-| portfolio UI mobile | BLOCKED | Same gate at 390px. |
+| portfolio UI desktop | PASS | Chrome at 1440px rendered Profiles, Jobs, Tasks, Approvals, messages, and Blockers through `AUTH_PROVIDER=builtin`. Both profiles showed `quota unknown`. No secrets. |
+| portfolio UI mobile | PASS | Chrome at 390px rendered the same page. Text wrapped. No horizontal page overflow. |
 | protected tasks | PASS | Fixture refusal in the control-plane suite. Live task 6 was not used. |
 | imported jobs | PASS | Snapshot import remains held. Jobs 70 and 71 were not released. |
 | task-6 preservation | PASS | Still `paused` on `agy-2`, verification `pending`. |
 | jobs 70/71 preservation | PASS | Both still `planned`. Queued prompts were not delivered. |
 | production boundaries | PASS | No live service was stopped. No production Supabase or paid render was used. |
-| tests | PASS | 27 passed, 0 failed, 0 skipped. |
+| tests | PASS | 28 passed, 0 failed, 0 skipped. |
 | Ruff | PASS | `ruff check` on the control-plane Python is clean. |
 | TypeScript | PASS | `pnpm exec tsc --noEmit` in `apps/web` exited 0. |
 | secret scan | PASS | gitleaks 8.28.0 found no leaks in the control-plane tree. |
 
-## Not eligible for cutover
+## Eligible for cutover
 
-The live approval prompt and the portfolio page were not proven. Fresh quota percentages were not observed. Do not stop Agent Control.
+Critical gates are proven. Do not execute the cutover in this run.
+
+Non-critical gaps:
+
+- A live Antigravity approval prompt was not emitted. The tested fail-closed approval path is enough for cutover.
+- No fresh numeric quota percentage is available from a supported source. Unknown stays unknown, and routing refuses rather than guessing.
+- `docker.service` is not installed here, so the Compose stack was not started. The page used the documented built-in provider instead of production Supabase.
 
 ## Prepared, not executed
 
@@ -54,7 +60,7 @@ The live approval prompt and the portfolio page were not proven. Fresh quota per
 8. Do not release task 6 or jobs 70 and 71.
 9. Confirm `vicoa-agy-1` and `vicoa-agy-2` still have separate token files.
 10. Call MCP `status` and confirm shell is rejected.
-11. Open `/dashboard/portfolio` only after local auth is configured.
+11. Open `/dashboard/portfolio` with `NEXT_PUBLIC_AUTH_PROVIDER=builtin`. Do not use production Supabase.
 12. Watch one harmless disposable job before any live job moves.
 13. Retirement order, later: orchestrator, then reaper, then API, then MCP. Not in this run.
 14. Roll back if a live task changes state, a second worker appears, or an imported job starts.

@@ -31,7 +31,7 @@ export default function PortfolioPage() {
   }, []);
 
   return (
-    <main className="mx-auto flex max-w-5xl flex-col gap-4 p-6">
+    <main className="mx-auto flex w-full max-w-5xl flex-col gap-4 overflow-x-hidden p-4 sm:p-6">
       <header>
         <h1 className="text-2xl font-semibold">Portfolio</h1>
         <p className="text-sm text-muted-foreground">
@@ -49,10 +49,11 @@ export default function PortfolioPage() {
             </CardHeader>
             <CardContent className="flex flex-col gap-2 text-sm">
               {status.accounts.map((account) => (
-                <div key={account.id}>
+                <div key={account.id} className="break-words">
                   {account.id} · {account.provider} · {account.auth_state} · workers {account.active_workers}/{account.max_workers}
+                  {account.quota_state === 'unknown' ? ' · quota unknown' : ` · quota ${account.quota_state}`}
                   {account.constrained ? ' · constrained' : ''}
-                  {account.drained ? ' · draining' : ''}
+                  {account.drained ? ' · draining' : ' · available'}
                   {account.enabled ? '' : ' · disabled'}
                 </div>
               ))}
@@ -82,8 +83,11 @@ export default function PortfolioPage() {
             <CardContent className="flex flex-col gap-2 text-sm">
               {status.tasks.length
                 ? status.tasks.map((task) => (
-                    <div key={task.id}>
+                    <div key={task.id} className="break-words">
                       {task.title} · worker {task.worker_status} · verification {task.verification_status}
+                      {task.account_id ? ` · ${task.account_id}` : ' · no profile'}
+                      {task.session_id ? ' · session set' : ' · no session'}
+                      {task.worktree_set ? ' · worktree set' : ' · no worktree'}
                       {task.protected ? ' · protected' : ''}
                       {task.owner_only ? ' · owner-only' : ''}
                       {task.import_hold ? ' · held' : ''}

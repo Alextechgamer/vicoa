@@ -153,6 +153,14 @@ def test_mcp_message_stays_queued(tmp_path: Path) -> None:
         dispatch(cp, "process_kill", {})
 
 
+def test_missing_quota_stays_unknown(tmp_path: Path) -> None:
+    cp = plane(tmp_path)
+    accounts(cp)
+    assert cp.account("agy-1")["quota_state"] == "unknown"
+    cp.observe_quota("agy-1", "antigravity", "weekly", value_pct=0, status="observed", source="fixture")
+    assert cp.account("agy-1")["quota_state"] == "exhausted"
+
+
 def test_postgres_migration_roundtrip() -> None:
     dsn = os.environ.get("VICOA_CONTROL_PLANE_PG", "postgresql://alex@/vicoa_control_plane")
     pytest.importorskip("psycopg2")

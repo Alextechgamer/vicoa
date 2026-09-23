@@ -302,7 +302,26 @@ class ControlPlane:
         data["runtime_home_set"] = bool(row["runtime_home"])
         data["runtime_home_hash"] = hashlib.sha256(row["runtime_home"].encode()).hexdigest()[:12]
         data["constraint_reason"] = redact(row["constraint_reason"])
+        data["quota_state"] = self._quota_state(row["id"])
         return data
+
+    def _quota_state(self, account_id: str) -> str:
+        with self._conn() as db:
+            rows = db.execute(
+                "SELECT value_pct, status, observed_at FROM quota_observations WHERE account_id=?",
+                (account_id,),
+            ).fetchall()
+        fresh = [row for row in rows if row["value_pct"] is not None and _fresh(str(row["observed_at"]))]
+        if not fresh:
+            return "unknown"
+        score = min(float(row["value_pct"]) for row in fresh)
+        if score <= 0:
+            return "exhausted"
+        if score < CRITICAL_PCT:
+            return "critical"
+        if score < CONSERVE_PCT:
+            return "conserve"
+        return "healthy"
 
     def set_constrained(self, account_id: str, *, constrained: bool, reason: str = "") -> dict[str, Any]:
         with self._conn() as db:
@@ -1314,6 +1333,7 @@ class ControlPlane:
             rows = db.execute(
                 """
                 SELECT id, title, worker_status, verification_status, account_id, session_id,
+                       CASE WHEN worktree_path = '' THEN 0 ELSE 1 END AS worktree_set,
                        protected, owner_only, import_hold, policy, source_id
                 FROM tasks ORDER BY id
                 """
