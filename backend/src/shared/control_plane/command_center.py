@@ -6,7 +6,9 @@ or write Agent Control. Locked legacy work is visible and cannot be acted on.
 
 from __future__ import annotations
 
+import json
 import subprocess
+from pathlib import Path
 from typing import Any
 
 from .store import ControlPlane, ControlPlaneError, redact
@@ -91,13 +93,6 @@ def task_view(plane: ControlPlane, task_id: int) -> dict[str, Any]:
                 (task_id,),
             ).fetchall()
         ]
-        verifications = [
-            {"id": int(row["id"]), "status": row["status"], "created_at": row["created_at"]}
-            for row in db.execute(
-                "SELECT id, status, created_at FROM verifications WHERE task_id=? ORDER BY id",
-                (task_id,),
-            ).fetchall()
-        ]
     lineage = plane.knowledge.sessions(task_id)
     for row in lineage:
         row.pop("id", None)
@@ -111,7 +106,10 @@ def task_view(plane: ControlPlane, task_id: int) -> dict[str, Any]:
         "skills": plane.knowledge.resolve_skills(task_id),
         "routing": plane.knowledge.explain_route(task_id),
         "messages": messages,
-        "verifications": verifications,
+        "verifications": verification_view(plane, task_id),
+        "conversation": conversation(plane, task_id),
+        "activity": activity(plane, task_id),
+        "files": task_files(plane, task_id),
         "timeline": plane.knowledge.timeline(task_id)[-EVENT_LIMIT:],
         "actions_allowed": not _locked(task),
     }
@@ -273,6 +271,132 @@ def _latest_context(plane: ControlPlane, task_id: int) -> dict[str, Any] | None:
         "used_tokens": int(row["used_tokens"]),
         "omitted": row["omitted_json"],
     }
+
+
+def conversation(plane: ControlPlane, task_id: int, *, limit: int = 40, before: int | None = None) -> dict[str, Any]:
+    sessions = plane.knowledge.sessions(task_id)
+    messages = plane.messages(task_id)
+    if before is not None:
+        messages = [row for row in messages if int(row["id"]) < before]
+    page = messages[-limit:]
+    items = []
+    for session in sessions:
+        items.append({
+            "kind": "boundary",
+            "session_id": session["session_id"],
+            "account_id": session["account_id"],
+            "status": session["status"],
+            "parent_session_id": session.get("parent_session_id") or "",
+            "handoff_id": session.get("handoff_id"),
+            "created_at": session.get("created_at"),
+        })
+    for row in page:
+        items.append({
+            "kind": "message",
+            "id": int(row["id"]),
+            "role": "owner",
+            "state": row["state"],
+            "text": redact(str(row.get("body") or ""))[:240],
+            "created_at": row.get("created_at"),
+        })
+    return {
+        "available": bool(page or sessions),
+        "source": "control_plane_messages_and_sessions",
+        "note": "Vicoa retained structured messages and session boundaries. A full provider transcript was not stored.",
+        "items": items,
+        "next_before": page[0]["id"] if page else None,
+    }
+
+
+def activity(plane: ControlPlane, task_id: int, *, limit: int = 40) -> dict[str, Any]:
+    rows = plane.knowledge.timeline(task_id)[-limit:]
+    return {"events": rows, "source": "plane_events"}
+
+
+def verification_view(plane: ControlPlane, task_id: int) -> list[dict[str, Any]]:
+    with plane._conn() as db:
+        rows = db.execute(
+            "SELECT id, status, evidence_json, created_at FROM verifications WHERE task_id=? ORDER BY id",
+            (task_id,),
+        ).fetchall()
+    views = []
+    for row in rows:
+        evidence = {}
+        try:
+            evidence = json.loads(row["evidence_json"] or "{}")
+        except json.JSONDecodeError:
+            evidence = {}
+        checks = []
+        for item in evidence.get("checks") or []:
+            checks.append({
+                "type": item.get("type"),
+                "passed": item.get("passed"),
+                "summary": redact(str(item.get("summary") or ""))[:180],
+            })
+        views.append({
+            "id": int(row["id"]),
+            "status": row["status"],
+            "created_at": row["created_at"],
+            "checks": checks,
+            "worktree_recorded": bool(evidence.get("worktree")),
+        })
+    return views
+
+
+def task_files(plane: ControlPlane, task_id: int) -> dict[str, Any]:
+    root = _worktree(plane, task_id)
+    if root is None:
+        return {"available": False, "reason": "worktree_missing", "files": []}
+    proc = subprocess.run(
+        ["git", "-C", str(root), "status", "--short"],
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+    files = []
+    for line in (proc.stdout or "").splitlines()[:80]:
+        status = line[:2].strip() or "changed"
+        name = line[3:].strip()
+        files.append({"status": status, "path": name})
+    return {"available": True, "files": files, "truncated": len(files) >= 80}
+
+
+def read_task_diff(plane: ControlPlane, task_id: int, relative: str) -> dict[str, Any]:
+    root = _worktree(plane, task_id)
+    if root is None:
+        raise ControlPlaneError("worktree_missing", "this task has no recorded worktree")
+    target = _contained(root, relative)
+    if target.is_symlink():
+        raise ControlPlaneError("path_rejected", "symlink escapes are rejected")
+    proc = subprocess.run(
+        ["git", "-C", str(root), "diff", "--", relative],
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+    text = redact(proc.stdout or "")
+    truncated = len(text) > 80000
+    return {"path": relative, "diff": text[:80000], "truncated": truncated, "binary": "\0" in (proc.stdout or "")}
+
+
+def _worktree(plane: ControlPlane, task_id: int):
+    task = plane.task(task_id)
+    raw = str(task.get("worktree_path") or "")
+    if not raw:
+        return None
+    root = Path(raw).resolve()
+    return root if root.is_dir() else None
+
+
+def _contained(root: Path, relative: str) -> Path:
+    if not relative or relative.startswith("/") or "\\" in relative:
+        raise ControlPlaneError("path_rejected", "path is outside the task worktree")
+    target = (root / relative).resolve()
+    if target != root and root not in target.parents:
+        raise ControlPlaneError("path_rejected", "path is outside the task worktree")
+    return target
 
 
 def _parse_cursor(cursor: int | str) -> tuple[int, int]:

@@ -66,11 +66,7 @@ export default function CommandCenterPage() {
     if (!authed || !snapshot) return;
     const source = new EventSource(`/api/control-plane/command-center/events?after=${encodeURIComponent(cursorRef.current || snapshot.cursor)}`);
     source.onopen = () => setConnected(true);
-    source.onerror = () => {
-      setConnected(false);
-      source.close();
-      window.setTimeout(() => setStreamAttempt((value) => value + 1), 2000);
-    };
+    source.onerror = () => setConnected(false);
     source.onmessage = (message) => {
       const page = JSON.parse(message.data) as { events: CommandEvent[]; cursor: string };
       cursorRef.current = page.cursor;
@@ -78,7 +74,7 @@ export default function CommandCenterPage() {
       setCursor(page.cursor);
     };
     return () => source.close();
-  }, [authed, snapshot, streamAttempt]);
+  }, [authed, snapshot]);
 
   const openTask = async (id: number) => {
     setTaskId(id);
@@ -217,6 +213,9 @@ function TaskDetail({ detail }: { detail: Record<string, unknown> }) {
   return (
     <div className="flex flex-col gap-2 text-sm">
       <div>{String(task.title || '')} · worker {String(task.worker_status || '')} · verification {String(task.verification_status || '')}{detail.locked ? ' · held, no actions' : ''}</div>
+      <div>Conversation: {conversationNote(detail)}</div>
+      <div>Verification: {verificationNote(detail)}</div>
+      <div>Files: {fileNote(detail)}</div>
       <div>Lineage: {lineage.map((row) => `${String(row.session_id)} on ${String(row.account_id)} (${String(row.status)}${row.parent_session_id ? `, parent ${String(row.parent_session_id)}` : ''}${row.handoff_id ? `, handoff ${String(row.handoff_id)}` : ''})`).join(' → ') || 'none'}</div>
       <div>Handoffs: {handoffs.map((row) => `#${String(row.id)} ${String(row.reason)} ${String(row.status)}`).join(' · ') || 'none'}</div>
       <div>Context: {context ? `pack ${String(context.id)} used ${String(context.used_tokens)}/${String(context.budget_tokens)}` : 'none recorded'}</div>
@@ -224,6 +223,25 @@ function TaskDetail({ detail }: { detail: Record<string, unknown> }) {
       <div>Messages: {messages.map((row) => `${String(row.body)} ${String(row.state)}`).join(' · ') || 'none'}</div>
     </div>
   );
+}
+
+function conversationNote(detail: Record<string, unknown>): string {
+  const conversation = detail.conversation as { note?: string; items?: Array<Record<string, unknown>> } | undefined;
+  const items = conversation?.items || [];
+  const boundaries = items.filter((item) => item.kind === 'boundary').map((item) => `${String(item.session_id)} ${String(item.status)} on ${String(item.account_id)}${item.handoff_id ? ` handoff ${String(item.handoff_id)}` : ''}`);
+  return boundaries.join(' → ') || conversation?.note || 'No stored provider transcript.';
+}
+
+function verificationNote(detail: Record<string, unknown>): string {
+  const rows = (detail.verifications || []) as Array<Record<string, unknown>>;
+  if (!rows.length) return 'No verification recorded.';
+  return rows.map((row) => `${String(row.status)} ${Array.isArray(row.checks) ? `${row.checks.length} checks` : ''}`.trim()).join(' · ');
+}
+
+function fileNote(detail: Record<string, unknown>): string {
+  const files = detail.files as { available?: boolean; reason?: string; files?: Array<Record<string, unknown>> } | undefined;
+  if (!files?.available) return files?.reason || 'Worktree is not available.';
+  return files.files?.map((row) => `${String(row.status)} ${String(row.path)}`).join(', ') || 'No changed files.';
 }
 
 function Rows({ rows, empty }: { rows: Array<Record<string, unknown>>; empty: string }) {

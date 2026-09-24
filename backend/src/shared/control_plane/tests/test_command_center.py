@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
 
-from shared.control_plane.command_center import assert_action_allowed, events_since, snapshot, task_view
+from shared.control_plane.command_center import (
+    assert_action_allowed,
+    events_since,
+    read_task_diff,
+    snapshot,
+    task_files,
+    task_view,
+)
 from shared.control_plane.store import ControlPlane, ControlPlaneError
 
 
@@ -60,3 +68,27 @@ def test_event_cursor_does_not_replay(tmp_path: Path) -> None:
     assert delta["events"]
     assert all(item["id"] not in {row["id"] for row in first["events"]} for item in delta["events"])
     assert "sk-" not in json.dumps(delta)
+
+
+def test_worktree_paths_reject_traversal_and_symlink_escape(tmp_path: Path) -> None:
+    cp = plane(tmp_path)
+    root = tmp_path / "repo"
+    root.mkdir()
+    subprocess.run(["git", "init"], cwd=root, check=True, capture_output=True)
+    (root / "ok.txt").write_text("ok\n")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret\n")
+    link = root / "escape"
+    link.symlink_to(outside)
+    job = cp.create_job(project=str(root), goal="files")
+    cp.create_account(account_id="canary-a", provider="antigravity", runtime_home=str(tmp_path / "home"))
+    task = cp.add_task(job["id"], title="files", plan_key="files")
+    cp.start_task(task["id"], account_id="canary-a", session_id="files")
+    cp.complete_worker(task["id"], worktree_path=str(root), output="done")
+    assert task_files(cp, task["id"])["available"] is True
+    with pytest.raises(ControlPlaneError) as traversal:
+        read_task_diff(cp, task["id"], "../outside.txt")
+    assert traversal.value.code == "path_rejected"
+    with pytest.raises(ControlPlaneError) as linked:
+        read_task_diff(cp, task["id"], "escape")
+    assert linked.value.code == "path_rejected"
