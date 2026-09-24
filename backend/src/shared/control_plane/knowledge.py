@@ -57,6 +57,9 @@ PACKET_KEYS = (
 )
 PRESSURE_RATIO = 0.85
 KNOWLEDGE_TABLES = (
+    "sessions",
+    "import_records",
+    "schema_revisions",
     "work_attempts",
     "plane_events",
     "handoff_packets",
@@ -66,6 +69,23 @@ KNOWLEDGE_TABLES = (
     "skill_activations",
     "skill_versions",
 )
+EXCLUSIVE_DOMAINS = frozenset(
+    {"roblox", "youtube", "batchideo", "vicoa-ui", "coc", "dogepick", "rollercoin"}
+)
+GENERAL_DOMAINS = frozenset({"general", "planning", "git", "review", "security", "testing", "research", "handoff"})
+DOMAIN_NEEDLES = {
+    "php": ("php", "wordpress", "woocommerce", "tillpress"),
+    "wordpress": ("wordpress", "woocommerce", "wp-"),
+    "tillpress": ("tillpress",),
+    "security": ("signature", "license", "verify", "security"),
+    "verification": ("verify", "verification", "phpunit"),
+    "roblox": ("roblox",),
+    "youtube": ("youtube", "yt-dlp"),
+    "batchideo": ("batchideo",),
+    "vicoa-ui": ("command center", "portfolio ui", "vicoa ui"),
+    "planning": ("plan", "decompose"),
+    "git": ("git", "github", "pull request"),
+}
 
 KNOWLEDGE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS skill_versions(
@@ -95,8 +115,38 @@ CREATE TABLE IF NOT EXISTS skill_versions(
   canary_status TEXT NOT NULL DEFAULT 'not_run',
   canary_evidence_json TEXT NOT NULL DEFAULT '{}',
   secrets_removed INTEGER NOT NULL DEFAULT 0,
+  domains_json TEXT NOT NULL DEFAULT '[]',
+  source_path TEXT NOT NULL DEFAULT '',
+  source_kind TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   UNIQUE(skill_key, version)
+);
+CREATE TABLE IF NOT EXISTS import_records(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_path TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  skill_key TEXT NOT NULL DEFAULT '',
+  decision TEXT NOT NULL,
+  detail TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sessions(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id INTEGER NOT NULL,
+  session_id TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  parent_session_id TEXT NOT NULL DEFAULT '',
+  handoff_id INTEGER,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(session_id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS sessions_one_continuation
+  ON sessions(handoff_id) WHERE handoff_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS schema_revisions(
+  revision TEXT PRIMARY KEY,
+  applied_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS skill_activations(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -197,6 +247,31 @@ def tokens(text: str) -> int:
     return max(1, (len(text) + 3) // 4)
 
 
+def estimate_tokens(text: str) -> int:
+    return tokens(text)
+
+
+def infer_domains(task, job) -> set[str]:
+    text = " ".join(
+        str(item or "")
+        for item in (task["title"], task["prompt"], task["project"], job["goal"], job["project"])
+    ).lower()
+    found = {domain for domain, needles in DOMAIN_NEEDLES.items() if any(needle in text for needle in needles)}
+    return found or {"general"}
+
+
+def domain_match(skill_domains: set[str], task_domains: set[str]) -> tuple[bool, str]:
+    domains = skill_domains or {"general"}
+    exclusive = domains & EXCLUSIVE_DOMAINS
+    if exclusive and not (exclusive & task_domains):
+        return False, "domain_excluded"
+    if "tillpress" in domains and "tillpress" not in task_domains and "wordpress" not in task_domains and "php" not in task_domains:
+        return False, "domain_excluded"
+    if domains & GENERAL_DOMAINS or domains & task_domains:
+        return True, "domain_match"
+    return False, "no_domain_overlap"
+
+
 def contains_secret(value: str) -> bool:
     return bool(SECRET_RE.search(value) or EXTRA_SECRET_RE.search(value))
 
@@ -223,14 +298,18 @@ def digest(value: Any) -> str:
 def assert_fresh_session(db, task_id: int, session_id: str) -> None:
     if not session_id:
         raise ControlPlaneError("session_reused", "a session id is required")
-    row = db.execute(
+    rolled = db.execute(
+        "SELECT id FROM sessions WHERE session_id=? AND status='rolled_over'",
+        (session_id,),
+    ).fetchone()
+    handed = db.execute(
         """
         SELECT id FROM handoff_packets
         WHERE task_id=? AND status='resumed' AND from_session_id=?
         """,
         (task_id, session_id),
     ).fetchone()
-    if row is not None:
+    if rolled is not None or handed is not None:
         raise ControlPlaneError("session_reused", "this session was already handed off")
 
 
@@ -286,6 +365,9 @@ class Knowledge:
         required_secret_names: list[str] | None = None,
         learned_from_task_id: int | None = None,
         supersedes_id: int | None = None,
+        domains: list[str] | None = None,
+        source_path: str = "",
+        source_kind: str = "",
     ) -> dict[str, Any]:
         key = _slug(skill_key)
         if scope not in SCOPES:
@@ -307,7 +389,17 @@ class Knowledge:
                 (key, content_hash),
             ).fetchone()
             if prior is not None:
-                found = _public_skill(prior, include_body=True)
+                db.execute(
+                    "UPDATE skill_versions SET domains_json=?, source_path=?, source_kind=?, compatible_agents_json=? WHERE id=?",
+                    (
+                        _json(domains or json.loads(prior["domains_json"] or "[]")),
+                        source_path or prior["source_path"],
+                        source_kind or prior["source_kind"],
+                        _json(compatible_agents or json.loads(prior["compatible_agents_json"] or "[]")),
+                        int(prior["id"]),
+                    ),
+                )
+                found = _public_skill(_must(db, "skill_versions", int(prior["id"])), include_body=True)
                 found["idempotent"] = True
                 return found
             version = int(
@@ -350,6 +442,11 @@ class Knowledge:
                 ),
             )
             row = _must(db, "skill_versions", int(cur.lastrowid))
+            db.execute(
+                "UPDATE skill_versions SET domains_json=?, source_path=?, source_kind=? WHERE id=?",
+                (_json(domains or ["general"]), source_path, source_kind, int(row["id"])),
+            )
+            row = _must(db, "skill_versions", int(row["id"]))
             emit(
                 db,
                 self.plane,
@@ -492,12 +589,100 @@ class Knowledge:
             rows = db.execute("SELECT * FROM skill_versions ORDER BY skill_key, version").fetchall()
         return [_public_skill(row, include_body=False) for row in rows]
 
-    def resolve_skills(self, task_id: int) -> dict[str, Any]:
+    def record_import(self, *, source_path: str, content_hash: str, skill_key: str, decision: str, detail: str = "") -> None:
+        with self.plane._conn() as db:
+            db.execute(
+                "INSERT INTO import_records(source_path, content_hash, skill_key, decision, detail, created_at) VALUES(?,?,?,?,?,?)",
+                (source_path, content_hash, skill_key, decision, detail[:500], _now()),
+            )
+
+    def record_revision(self, revision: str) -> None:
+        with self.plane._conn() as db:
+            db.execute(
+                "INSERT INTO schema_revisions(revision, applied_at) VALUES(?,?) ON CONFLICT(revision) DO NOTHING",
+                (revision, _now()),
+            )
+
+    def revisions(self) -> list[str]:
+        with self.plane._conn() as db:
+            return [row["revision"] for row in db.execute("SELECT revision FROM schema_revisions ORDER BY revision")]
+
+    def open_session(self, task_id: int, session_id: str, *, account_id: str, provider: str, parent_session_id: str = "", handoff_id: int | None = None) -> dict[str, Any]:
+        if not session_id.strip():
+            raise ControlPlaneError("invalid", "session id is required")
+        with self.plane._conn() as db:
+            self.plane._task(db, task_id)
+            existing = db.execute("SELECT * FROM sessions WHERE session_id=?", (session_id,)).fetchone()
+            if existing is not None:
+                return dict(existing)
+            if handoff_id is not None:
+                taken = db.execute("SELECT session_id FROM sessions WHERE handoff_id=?", (handoff_id,)).fetchone()
+                if taken is not None and taken["session_id"] != session_id:
+                    raise ControlPlaneError("duplicate_continuation", "this handoff already has a continuation session")
+            db.execute(
+                """
+                INSERT INTO sessions(task_id, session_id, account_id, provider, parent_session_id, handoff_id, status, created_at)
+                VALUES(?,?,?,?,?,?,?,?)
+                """,
+                (task_id, session_id, account_id, provider, parent_session_id, handoff_id, "active", _now()),
+            )
+            emit(db, self.plane, task_id=task_id, job_id=None, session_id=session_id, event_type="session_opened", message=f"session {session_id} opened", detail={"account_id": account_id, "parent": parent_session_id})
+            row = db.execute("SELECT * FROM sessions WHERE session_id=?", (session_id,)).fetchone()
+        return dict(row)
+
+    def mark_rolled_over(self, session_id: str) -> dict[str, Any]:
+        with self.plane._conn() as db:
+            cur = db.execute("UPDATE sessions SET status='rolled_over' WHERE session_id=? AND status='active'", (session_id,))
+            if cur.rowcount != 1:
+                row = db.execute("SELECT * FROM sessions WHERE session_id=?", (session_id,)).fetchone()
+                if row is None:
+                    raise ControlPlaneError("not_found", session_id)
+                if row["status"] != "rolled_over":
+                    raise ControlPlaneError("state", "session cannot roll over")
+            else:
+                row = db.execute("SELECT * FROM sessions WHERE session_id=?", (session_id,)).fetchone()
+                emit(db, self.plane, task_id=int(row["task_id"]), job_id=None, session_id=session_id, event_type="session_rolled_over", message=f"session {session_id} rolled over", detail={})
+        return dict(row)
+
+    def sessions(self, task_id: int) -> list[dict[str, Any]]:
+        with self.plane._conn() as db:
+            return [dict(row) for row in db.execute("SELECT * FROM sessions WHERE task_id=? ORDER BY id", (task_id,))]
+
+    def dashboard(self, task_id: int | None = None) -> dict[str, Any]:
+        with self.plane._conn() as db:
+            skills = db.execute("SELECT status, COUNT(*) AS n FROM skill_versions GROUP BY status").fetchall()
+            memories = db.execute("SELECT authority, status, COUNT(*) AS n FROM memories GROUP BY authority, status").fetchall()
+            handoffs = db.execute("SELECT status, COUNT(*) AS n FROM handoff_packets GROUP BY status").fetchall()
+            latest = None
+            if task_id is not None:
+                pack = db.execute("SELECT used_tokens, budget_tokens FROM context_packs WHERE task_id=? ORDER BY id DESC LIMIT 1", (task_id,)).fetchone()
+                latest = None if pack is None else {"used_tokens": pack["used_tokens"], "budget_tokens": pack["budget_tokens"]}
+                lineage = [dict(row) for row in db.execute("SELECT session_id, account_id, provider, parent_session_id, status, handoff_id FROM sessions WHERE task_id=? ORDER BY id", (task_id,))]
+                task = self.plane._task(db, task_id)
+            else:
+                lineage = []
+                task = None
+        return {
+            "skills": [dict(row) for row in skills],
+            "memories": [dict(row) for row in memories],
+            "handoffs": [dict(row) for row in handoffs],
+            "context": latest,
+            "lineage": lineage,
+            "rollover_count": sum(1 for row in lineage if row["status"] == "rolled_over"),
+            "worker_status": None if task is None else task["worker_status"],
+            "verification_status": None if task is None else task["verification_status"],
+            "account_id": None if task is None else task["account_id"],
+            "session_id": None if task is None else task["session_id"],
+            "source": "control_plane_state",
+        }
+
+    def resolve_skills(self, task_id: int, *, provider: str = "antigravity") -> dict[str, Any]:
         with self.plane._conn() as db:
             task, job = _task_job(db, task_id)
             scopes = _scopes(task, job)
             activations = db.execute("SELECT * FROM skill_activations WHERE status='active' ORDER BY id").fetchall()
             versions = {int(row["id"]): row for row in db.execute("SELECT * FROM skill_versions").fetchall()}
+        task_domains = infer_domains(task, job)
         active: list[dict[str, Any]] = []
         skipped: list[dict[str, Any]] = []
         best: dict[str, tuple[int, dict[str, Any]]] = {}
@@ -509,21 +694,39 @@ class Knowledge:
             if not _scope_matches(activation["scope"], activation["scope_ref"], scopes):
                 skipped.append({"skill_key": activation["skill_key"], "reason": "scope_mismatch"})
                 continue
+            agents = json.loads(version["compatible_agents_json"] or "[]")
+            if agents and provider not in agents and "any" not in agents:
+                skipped.append({"skill_key": activation["skill_key"], "reason": "provider_mismatch"})
+                continue
+            domains = set(json.loads(version["domains_json"] or "[]"))
+            matched, reason = domain_match(domains, task_domains)
+            if not matched:
+                skipped.append({"skill_key": activation["skill_key"], "reason": reason, "domains": sorted(domains)})
+                continue
             rank = SCOPE_RANK[activation["scope"]]
             current = best.get(activation["skill_key"])
+            estimate = estimate_tokens(version["description"])
             public = {
                 "skill_key": activation["skill_key"],
                 "version": int(version["version"]),
                 "version_id": int(version["id"]),
                 "scope": activation["scope"],
-                "why": f"active on {activation['scope']}",
+                "domains": sorted(domains),
+                "token_estimate": estimate,
+                "why": f"{reason}; active on {activation['scope']}",
             }
             if current is None or rank >= current[0]:
                 if current is not None:
                     skipped.append({"skill_key": activation["skill_key"], "reason": "less_specific_scope"})
                 best[activation["skill_key"]] = (rank, public)
         active.extend(item for _rank, item in best.values())
-        return {"active": active, "skipped": skipped}
+        return {
+            "active": active,
+            "skipped": skipped,
+            "task_domains": sorted(task_domains),
+            "selected_ids": [item["version_id"] for item in active],
+            "token_estimate": sum(item["token_estimate"] for item in active),
+        }
 
     def remember(
         self,
@@ -822,6 +1025,16 @@ class Knowledge:
                 (task_id, task["job_id"], task["session_id"] or "", reason, "prepared", blob, digest(packet), _now()),
             )
             packet_id = int(cur.lastrowid)
+            emit(
+                db,
+                self.plane,
+                task_id=task_id,
+                job_id=int(task["job_id"]),
+                session_id=task["session_id"] or "",
+                event_type="handoff_started",
+                message=f"HANDOFF_STARTED {packet_id} for {reason}",
+                detail={"packet_id": packet_id, "reason": reason, "launched": False},
+            )
             emit(
                 db,
                 self.plane,
@@ -1407,6 +1620,9 @@ def _public_skill(row, *, include_body: bool) -> dict[str, Any]:
         "secrets_removed": int(row["secrets_removed"]),
         "required_secret_names": json.loads(row["required_secret_names_json"]),
         "compatible_agents": json.loads(row["compatible_agents_json"]),
+        "domains": json.loads(row["domains_json"] or "[]"),
+        "source_path": row["source_path"],
+        "source_kind": row["source_kind"],
         "required_tools": json.loads(row["required_tools_json"]),
         "created_at": row["created_at"],
     }

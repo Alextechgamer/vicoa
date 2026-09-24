@@ -95,4 +95,4 @@ Context omissions use `over_budget`, `truncated_over_budget`, `stale`, `low_auth
 - A second job scheduler or worker supervisor.
 - The full Command Center UI. The read views above are the current surface.
 
-Migration `b4e7c2a91d18` creates and drops these tables. The store also creates them on open so a disposable SQLite file works without Alembic. Canary evidence is in `CANARY-SKILLS-MEMORY.md`.
+Migration `b4e7c2a91d18` creates and drops these tables. The store also creates them on open so a disposable SQLite file works without Alembic. Canary evidence is in `CANARY-SKILLS-MEMORY.md`. The live import and rollover record is `LIVE-SKILLS-HANDOFF.md`.

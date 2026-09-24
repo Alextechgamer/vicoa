@@ -269,7 +269,38 @@ def test_crash_prepares_a_handoff_without_launching(tmp_path: Path) -> None:
     assert cp.task(task_id)["session_id"] == "live"
 
 
-def test_canary_passes_on_a_disposable_database(tmp_path: Path) -> None:
+def test_domain_routing_excludes_unrelated_skills(tmp_path: Path) -> None:
+    cp = plane(tmp_path)
+    php = cp.knowledge.register_skill(
+        skill_key="wp-signature",
+        name="WP signature",
+        description="Verify a WordPress PHP signature",
+        body="Check the signature before recording state.",
+        domains=["php", "wordpress", "tillpress", "security", "verification"],
+        compatible_agents=["any"],
+    )
+    roblox = cp.knowledge.register_skill(
+        skill_key="roblox-motion",
+        name="Roblox motion",
+        description="Roblox only",
+        body="Do not use this outside Roblox.",
+        domains=["roblox"],
+        compatible_agents=["any"],
+    )
+    for row in (php, roblox):
+        cp.knowledge.record_canary(row["id"], passed=True, evidence={"summary": "classified"})
+        cp.knowledge.activate_skill(row["id"])
+    till = cp.create_job(project="tillpress", goal="verify a PHP signature")
+    task_a = cp.add_task(till["id"], title="Tillpress PHP signature verification", plan_key="a", prompt="verify the license signature")
+    selected = cp.knowledge.resolve_skills(task_a["id"])
+    assert php["id"] in selected["selected_ids"]
+    assert roblox["id"] not in selected["selected_ids"]
+    assert any(item["reason"] == "domain_excluded" and item["skill_key"] == "roblox-motion" for item in selected["skipped"])
+    other = cp.create_job(project="roblox-game", goal="animate a Roblox character")
+    task_b = cp.add_task(other["id"], title="Roblox animation", plan_key="b", prompt="roblox motion only")
+    second = cp.knowledge.resolve_skills(task_b["id"])
+    assert php["id"] not in second["selected_ids"]
+    assert roblox["id"] in second["selected_ids"]
     result = run_canary(tmp_path / "canary.db")
     assert result["passed"], result["checks"]
     with pytest.raises(ControlPlaneError):
@@ -335,3 +366,16 @@ def test_postgres_knowledge_migration_roundtrip() -> None:
     assert again.knowledge.skill(row["id"])["skill_key"] == "pg-check"
     with engine.begin() as conn:
         conn.exec_driver_sql(drop)
+
+
+def test_rolled_session_cannot_start_again(tmp_path: Path) -> None:
+    cp = plane(tmp_path)
+    task_id = task(cp)
+    cp.route(task_id)
+    cp.start_task(task_id, account_id="canary-a", session_id="session-a")
+    cp.knowledge.open_session(task_id, "session-a", account_id="canary-a", provider="antigravity")
+    cp.knowledge.prepare_handoff(task_id, reason="context_pressure")
+    cp.knowledge.mark_rolled_over("session-a")
+    with pytest.raises(ControlPlaneError) as blocked:
+        cp.start_task(task_id, account_id="canary-a", session_id="session-a")
+    assert blocked.value.code == "session_reused"

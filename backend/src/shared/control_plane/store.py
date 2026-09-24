@@ -690,6 +690,27 @@ class ControlPlane:
             self._event(db, task_id, f"started on {account_id} session {session_id}")
         return self.task(task_id)
 
+    def continue_task(self, task_id: int, *, account_id: str, session_id: str) -> dict[str, Any]:
+        """Switch a running task to a new session without starting another worker."""
+        with self._conn() as db:
+            task = self._task(db, task_id)
+            if task["worker_status"] != "running":
+                raise ControlPlaneError("state", "only a running task can continue")
+            if task["session_id"] == session_id:
+                raise ControlPlaneError("session_reused", "continuation needs a new session")
+            from .knowledge import assert_fresh_session
+
+            assert_fresh_session(db, task_id, session_id)
+            account = db.execute("SELECT * FROM accounts WHERE id=?", (account_id,)).fetchone()
+            if account is None or not account["enabled"] or account["drained"] or account["constrained"]:
+                raise ControlPlaneError("account", "account is not eligible to continue work")
+            if task["account_id"] and task["account_id"] != account_id:
+                db.execute("UPDATE accounts SET active_workers=MAX(active_workers-1, 0) WHERE id=?", (task["account_id"],))
+                db.execute("UPDATE accounts SET active_workers=active_workers+1 WHERE id=?", (account_id,))
+            self._touch(db, task_id, account_id=account_id, session_id=session_id, heartbeat_at=_now())
+            self._event(db, task_id, f"continued on {account_id} session {session_id}")
+        return self.task(task_id)
+
     def complete_worker(
         self,
         task_id: int,
@@ -1373,6 +1394,7 @@ class ControlPlane:
             "message_states": self._message_states(),
             "tasks": self.task_board(),
             "approvals": self.approval_board(),
+            "knowledge": self.knowledge.dashboard(),
         }
 
     def task_board(self) -> list[dict[str, Any]]:
