@@ -40,6 +40,33 @@ A Hermes adapter rendered the same context pack. It did not copy the skill files
 
 `cl100k_base` was available only in a temporary environment. On three samples the chars/4 estimate was at or above the tokenizer count, so the estimator was not increased. Rollover still applies a 1.25 margin.
 
+## Automatic live rollover closure
+
+The earlier task 128 proof used real sessions but manual lifecycle calls. Task 131 closed the remaining gate through `AntigravityTaskWorker`, which watches provider context and owns the Session A to Session B transition once invoked by the existing dispatcher. It does not add another scheduler.
+
+- Session A `2c8b7de5-245f-4d68-a659-0f6281df1ab2` ran on `vicoa-agy-1`.
+- Session B `17d33e0e-c6a7-4141-91b7-311a68f945b6` ran on `vicoa-agy-2`.
+- Handoff 7 was resumed once with correct parent/child lineage.
+- The same task 131 and disposable worktree continued.
+- Phase A was unchanged; Phase B was added; deterministic verification passed.
+- `ack-me`, `keep-me`, and `during-handoff` were each acknowledged in one attempt and correct order.
+- Session A measured 16,111 tokens. Session B started from a 524-token Context Pack, about 15,587 tokens smaller.
+- The structured handoff was 3,142 bytes, about 785 estimated tokens.
+- No Antigravity process remained after completion.
+
+The live canary also exposed an over-broad PHP skill match on a generic verification task. The final routing logic treats PHP, WordPress, and Tillpress as specialized domains. The generic task now records that skill as `domain_excluded`; the Tillpress task still selects it. See `AUTOMATIC-ROLLOVER-CANARY.md`.
+
+Restart recovery is covered with a reopened disposable database: the prepared handoff survives, one Session B claims it, and a competing continuation is refused.
+
+## Final validation
+
+- Control-plane, HTTP/MCP, profile, local-worker, automatic-worker, and RPC skill tests: 64 passed.
+- Antigravity event/session/spec tests: 48 passed.
+- PostgreSQL Alembic upgrade, downgrade, re-upgrade, and persistence roundtrip: passed.
+- Ruff 0.11.13 on every changed Python file: passed.
+- Gitleaks 8.28.0 on the staged patch: zero findings. Historical repository findings were unchanged.
+- TypeScript: not applicable; no TypeScript changed.
+
 ## Checkout Sentinel
 
 Job 111 / task 124 is still planned, queued, and held. The success path in `includes/class-csent-license.php` calls `verify_response` before `persist`. A failed check persists `was_active` as false. No patch, merge, or deploy was made.

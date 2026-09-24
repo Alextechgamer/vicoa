@@ -56,6 +56,7 @@ PACKET_KEYS = (
     "resume_instructions",
 )
 PRESSURE_RATIO = 0.85
+CONTEXT_SAFETY_MARGIN = 1.25
 KNOWLEDGE_TABLES = (
     "sessions",
     "import_records",
@@ -73,6 +74,7 @@ EXCLUSIVE_DOMAINS = frozenset(
     {"roblox", "youtube", "batchideo", "vicoa-ui", "coc", "dogepick", "rollercoin"}
 )
 GENERAL_DOMAINS = frozenset({"general", "planning", "git", "review", "security", "testing", "research", "handoff"})
+SPECIALIZED_DOMAINS = frozenset({"php", "wordpress", "tillpress"})
 DOMAIN_NEEDLES = {
     "php": ("php", "wordpress", "woocommerce", "tillpress"),
     "wordpress": ("wordpress", "woocommerce", "wp-"),
@@ -265,7 +267,8 @@ def domain_match(skill_domains: set[str], task_domains: set[str]) -> tuple[bool,
     exclusive = domains & EXCLUSIVE_DOMAINS
     if exclusive and not (exclusive & task_domains):
         return False, "domain_excluded"
-    if "tillpress" in domains and "tillpress" not in task_domains and "wordpress" not in task_domains and "php" not in task_domains:
+    specialized = domains & SPECIALIZED_DOMAINS
+    if specialized and not (specialized & task_domains):
         return False, "domain_excluded"
     if domains & GENERAL_DOMAINS or domains & task_domains:
         return True, "domain_match"
@@ -607,26 +610,135 @@ class Knowledge:
         with self.plane._conn() as db:
             return [row["revision"] for row in db.execute("SELECT revision FROM schema_revisions ORDER BY revision")]
 
-    def open_session(self, task_id: int, session_id: str, *, account_id: str, provider: str, parent_session_id: str = "", handoff_id: int | None = None) -> dict[str, Any]:
+    def open_session(
+        self,
+        task_id: int,
+        session_id: str,
+        *,
+        account_id: str,
+        provider: str,
+        parent_session_id: str = "",
+        handoff_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Reserve one provider session and, optionally, one continuation.
+
+        Repeating the exact reservation is idempotent. Reusing a provider
+        session id for another task/account/lineage fails closed, as does a
+        second continuation for the same handoff.
+        """
         if not session_id.strip():
             raise ControlPlaneError("invalid", "session id is required")
         with self.plane._conn() as db:
             self.plane._task(db, task_id)
             existing = db.execute("SELECT * FROM sessions WHERE session_id=?", (session_id,)).fetchone()
+            expected = {
+                "task_id": int(task_id),
+                "account_id": account_id,
+                "provider": provider,
+                "parent_session_id": parent_session_id,
+                "handoff_id": handoff_id,
+            }
             if existing is not None:
+                actual = {key: existing[key] for key in expected}
+                if actual != expected:
+                    raise ControlPlaneError(
+                        "session_collision",
+                        "the provider session id is already bound to another lineage",
+                    )
                 return dict(existing)
+
+            if parent_session_id:
+                parent = db.execute(
+                    "SELECT * FROM sessions WHERE session_id=?",
+                    (parent_session_id,),
+                ).fetchone()
+                if parent is None or int(parent["task_id"]) != int(task_id):
+                    raise ControlPlaneError("session_parent", "the parent session is not part of this task")
+                if parent["status"] != "rolled_over":
+                    raise ControlPlaneError("session_parent", "the parent session has not rolled over")
+
             if handoff_id is not None:
-                taken = db.execute("SELECT session_id FROM sessions WHERE handoff_id=?", (handoff_id,)).fetchone()
+                packet = db.execute("SELECT * FROM handoff_packets WHERE id=?", (handoff_id,)).fetchone()
+                if packet is None or int(packet["task_id"]) != int(task_id):
+                    raise ControlPlaneError("handoff_mismatch", "the handoff does not belong to this task")
+                if parent_session_id != packet["from_session_id"]:
+                    raise ControlPlaneError("handoff_mismatch", "the handoff source session does not match")
+                if packet["status"] == "resumed" and packet["to_session_id"] != session_id:
+                    raise ControlPlaneError(
+                        "duplicate_continuation",
+                        "this handoff already has another continuation session",
+                    )
+                if packet["status"] not in {"prepared", "validated", "resumed"}:
+                    raise ControlPlaneError("handoff_state", "the handoff is not available for continuation")
+                taken = db.execute("SELECT * FROM sessions WHERE handoff_id=?", (handoff_id,)).fetchone()
                 if taken is not None and taken["session_id"] != session_id:
-                    raise ControlPlaneError("duplicate_continuation", "this handoff already has a continuation session")
-            db.execute(
+                    raise ControlPlaneError(
+                        "duplicate_continuation",
+                        "this handoff already has a continuation session",
+                    )
+
+            cur = db.execute(
                 """
-                INSERT INTO sessions(task_id, session_id, account_id, provider, parent_session_id, handoff_id, status, created_at)
-                VALUES(?,?,?,?,?,?,?,?)
+                INSERT INTO sessions(
+                  task_id, session_id, account_id, provider, parent_session_id,
+                  handoff_id, status, created_at
+                ) VALUES(?,?,?,?,?,?,?,?)
+                ON CONFLICT DO NOTHING
                 """,
                 (task_id, session_id, account_id, provider, parent_session_id, handoff_id, "active", _now()),
             )
-            emit(db, self.plane, task_id=task_id, job_id=None, session_id=session_id, event_type="session_opened", message=f"session {session_id} opened", detail={"account_id": account_id, "parent": parent_session_id})
+            if cur.rowcount != 1:
+                collision = db.execute(
+                    "SELECT * FROM sessions WHERE session_id=? OR handoff_id=?",
+                    (session_id, handoff_id),
+                ).fetchone()
+                if collision is not None and collision["session_id"] == session_id:
+                    actual = {key: collision[key] for key in expected}
+                    if actual == expected:
+                        return dict(collision)
+                    raise ControlPlaneError(
+                        "session_collision",
+                        "the provider session id is already bound to another lineage",
+                    )
+                raise ControlPlaneError(
+                    "duplicate_continuation",
+                    "this handoff already has a continuation session",
+                )
+            emit(
+                db,
+                self.plane,
+                task_id=task_id,
+                job_id=None,
+                session_id=session_id,
+                event_type="session_opened",
+                message=f"session {session_id} opened",
+                detail={"account_id": account_id, "parent": parent_session_id, "handoff_id": handoff_id},
+            )
+            row = db.execute("SELECT * FROM sessions WHERE session_id=?", (session_id,)).fetchone()
+        return dict(row)
+
+    def close_session(self, session_id: str, *, status: str = "completed") -> dict[str, Any]:
+        if status not in {"completed", "failed", "interrupted", "rolled_over"}:
+            raise ControlPlaneError("invalid", "unsupported session terminal status")
+        with self.plane._conn() as db:
+            row = db.execute("SELECT * FROM sessions WHERE session_id=?", (session_id,)).fetchone()
+            if row is None:
+                raise ControlPlaneError("not_found", session_id)
+            if row["status"] == status:
+                return dict(row)
+            if row["status"] == "rolled_over" and status != "rolled_over":
+                raise ControlPlaneError("state", "a rolled-over session cannot change terminal state")
+            db.execute("UPDATE sessions SET status=? WHERE session_id=?", (status, session_id))
+            emit(
+                db,
+                self.plane,
+                task_id=int(row["task_id"]),
+                job_id=None,
+                session_id=session_id,
+                event_type="session_closed",
+                message=f"session {session_id} closed as {status}",
+                detail={"status": status},
+            )
             row = db.execute("SELECT * FROM sessions WHERE session_id=?", (session_id,)).fetchone()
         return dict(row)
 
@@ -1011,6 +1123,18 @@ class Knowledge:
         with self.plane._conn() as db:
             task, job = _task_job(db, task_id)
             self.plane._guard(task, "mutate", override_reason=override_reason)
+            source_session = task["session_id"] or ""
+            existing = db.execute(
+                """
+                SELECT * FROM handoff_packets
+                WHERE task_id=? AND from_session_id=? AND reason=?
+                  AND status IN ('prepared', 'validated')
+                ORDER BY id DESC LIMIT 1
+                """,
+                (task_id, source_session, reason),
+            ).fetchone()
+            if existing is not None:
+                return _public_handoff(existing)
             packet = self._packet(db, task, job, reason)
             errors = _packet_errors(packet, digest(packet))
             if errors:
@@ -1022,7 +1146,7 @@ class Knowledge:
                   task_id, job_id, from_session_id, reason, status, packet_json, packet_hash, created_at
                 ) VALUES(?,?,?,?,?,?,?,?)
                 """,
-                (task_id, task["job_id"], task["session_id"] or "", reason, "prepared", blob, digest(packet), _now()),
+                (task_id, task["job_id"], source_session, reason, "prepared", blob, digest(packet), _now()),
             )
             packet_id = int(cur.lastrowid)
             emit(
@@ -1030,7 +1154,7 @@ class Knowledge:
                 self.plane,
                 task_id=task_id,
                 job_id=int(task["job_id"]),
-                session_id=task["session_id"] or "",
+                session_id=source_session,
                 event_type="handoff_started",
                 message=f"HANDOFF_STARTED {packet_id} for {reason}",
                 detail={"packet_id": packet_id, "reason": reason, "launched": False},
@@ -1040,7 +1164,7 @@ class Knowledge:
                 self.plane,
                 task_id=task_id,
                 job_id=int(task["job_id"]),
-                session_id=task["session_id"] or "",
+                session_id=source_session,
                 event_type="handoff_prepared",
                 message=f"prepared handoff {packet_id} for {reason}",
                 detail={"packet_id": packet_id, "reason": reason, "launched": False},
@@ -1079,6 +1203,39 @@ class Knowledge:
             row = _must(db, "handoff_packets", packet_id)
             task = self.plane._task(db, int(row["task_id"]))
             self.plane._guard(task, "mutate", override_reason=override_reason)
+            if row["status"] == "resumed":
+                if row["to_session_id"] != new_session_id:
+                    raise ControlPlaneError(
+                        "duplicate_continuation",
+                        "this handoff already resumed into another session",
+                    )
+                existing_pack = db.execute(
+                    """
+                    SELECT * FROM context_packs
+                    WHERE task_id=? AND session_id=? AND purpose='handoff-resume'
+                    ORDER BY id DESC LIMIT 1
+                    """,
+                    (task["id"], new_session_id),
+                ).fetchone()
+                if existing_pack is None:
+                    raise ControlPlaneError(
+                        "handoff_state", "resumed handoff is missing its Context Pack"
+                    )
+                return {
+                    "launched": False,
+                    "killed": False,
+                    "idempotent": True,
+                    "packet_id": packet_id,
+                    "context_pack_id": int(existing_pack["id"]),
+                    "session_id": new_session_id,
+                    "from_session_id": row["from_session_id"],
+                    "worker_status": task["worker_status"],
+                    "task_session_id": task["session_id"],
+                }
+            if row["status"] not in {"prepared", "validated"}:
+                raise ControlPlaneError(
+                    "handoff_state", "the handoff is not available to resume"
+                )
             if task["worker_status"] in {"running", "needs_input"}:
                 emit(
                     db,
@@ -1113,6 +1270,18 @@ class Knowledge:
                     level="error",
                 )
                 raise ControlPlaneError("handoff_invalid", ",".join(errors))
+            claimed = db.execute(
+                """
+                UPDATE handoff_packets
+                SET status='resuming', to_session_id=?
+                WHERE id=? AND status IN ('prepared', 'validated')
+                """,
+                (new_session_id, packet_id),
+            )
+            if claimed.rowcount != 1:
+                raise ControlPlaneError(
+                    "duplicate_continuation", "another continuation claimed this handoff"
+                )
             sections = [{"key": key, "priority": 50, "text": canonical(packet[key])[:1200], "tokens": tokens(canonical(packet[key])[:1200])} for key in PACKET_KEYS]
             budget = int((packet.get("context_budget") or {}).get("budget_tokens") or 1200)
             fitted = _fit(sections, [], [], budget)
@@ -1138,14 +1307,18 @@ class Knowledge:
                 ),
             )
             pack_id = int(cur.lastrowid)
-            db.execute(
+            resumed = db.execute(
                 """
                 UPDATE handoff_packets
-                SET status='resumed', to_session_id=?, validation_json=?, resumed_at=?
-                WHERE id=?
+                SET status='resumed', validation_json=?, resumed_at=?
+                WHERE id=? AND status='resuming' AND to_session_id=?
                 """,
-                (new_session_id, _json({"ok": True, "errors": []}), _now(), packet_id),
+                (_json({"ok": True, "errors": []}), _now(), packet_id, new_session_id),
             )
+            if resumed.rowcount != 1:
+                raise ControlPlaneError(
+                    "duplicate_continuation", "the handoff claim changed before resume"
+                )
             emit(
                 db,
                 self.plane,
@@ -1169,7 +1342,8 @@ class Knowledge:
         }
 
     def note_pressure(self, task_id: int, *, used_tokens: int, budget_tokens: int) -> dict[str, Any]:
-        if budget_tokens <= 0 or (used_tokens / budget_tokens) < PRESSURE_RATIO:
+        pressure = (used_tokens * CONTEXT_SAFETY_MARGIN) / budget_tokens if budget_tokens > 0 else 0
+        if budget_tokens <= 0 or pressure < PRESSURE_RATIO:
             return {"prepared": False, "resumed": False, "killed": False, "reason": "within_budget"}
         packet = self.prepare_handoff(task_id, reason="context_pressure")
         task = self.plane.task(task_id)
@@ -1191,7 +1365,40 @@ class Knowledge:
             "killed": False,
             "kept_healthy_session": kept,
             "packet_id": packet["id"],
+            "pressure_ratio": pressure,
         }
+
+    def context_pack(self, pack_id: int) -> dict[str, Any]:
+        with self.plane._conn() as db:
+            row = db.execute("SELECT * FROM context_packs WHERE id=?", (pack_id,)).fetchone()
+        if row is None:
+            raise ControlPlaneError("not_found", f"context pack {pack_id} not found")
+        return {
+            "id": int(row["id"]),
+            "task_id": row["task_id"],
+            "job_id": row["job_id"],
+            "session_id": row["session_id"],
+            "purpose": row["purpose"],
+            "budget_tokens": int(row["budget_tokens"]),
+            "used_tokens": int(row["used_tokens"]),
+            "pack_hash": row["pack_hash"],
+            "sections": json.loads(row["sections_json"]),
+            "omitted": json.loads(row["omitted_json"]),
+            "stale": json.loads(row["stale_json"]),
+            "created_at": row["created_at"],
+        }
+
+    def pending_handoff(self, task_id: int) -> dict[str, Any] | None:
+        with self.plane._conn() as db:
+            row = db.execute(
+                """
+                SELECT * FROM handoff_packets
+                WHERE task_id=? AND status IN ('prepared', 'validated')
+                ORDER BY id DESC LIMIT 1
+                """,
+                (task_id,),
+            ).fetchone()
+        return None if row is None else _public_handoff(row)
 
     def handoff(self, packet_id: int) -> dict[str, Any]:
         with self.plane._conn() as db:
@@ -1434,7 +1641,7 @@ class Knowledge:
             "blockers": [name for name, flag in (("owner_only", task["owner_only"]), ("protected", task["protected"]), ("import_hold", task["import_hold"])) if flag],
             "attempted": attempted,
             "failed": failed,
-            "next_action": _next_action(task),
+            "next_action": _handoff_next_action(task, reason),
             "files_changed": files,
             "commands_run": commands,
             "verification": {"status": verification_status},
@@ -1531,6 +1738,15 @@ def _packet_errors(packet: dict[str, Any], packet_hash: str) -> list[str]:
     if "worker_output" in packet:
         errors.append("raw_log_present")
     return errors
+
+
+def _handoff_next_action(task, reason: str) -> str:
+    if task["verification_status"] == "passed":
+        return "continue downstream in the fresh session; do not repeat passed verification"
+    return (
+        f"continue the same task in a fresh session after {reason}; "
+        "preserve the worktree and do not repeat completed work"
+    )
 
 
 def _next_action(task) -> str:

@@ -39,7 +39,22 @@ packet = plane.knowledge.prepare_handoff(task_id, reason="manual")
 plane.knowledge.resume_from_handoff(packet["id"], new_session_id="session-2")
 ```
 
-`resume_from_handoff` does not launch a worker. The next start goes through `start_task` with the new session id. The old session id is refused after a resumed handoff.
+`resume_from_handoff` is the low-level bookkeeping primitive and does not launch a worker. The production adapter is `AntigravityTaskWorker`: once a task is started through that adapter, it measures context use, prepares the handoff, closes Session A, launches Session B, binds the canonical handoff, restores the compact Context Pack, and continues the same task/worktree. The old session id is refused after rollover.
+
+```python
+from shared.control_plane.antigravity_worker import AntigravityTaskWorker
+
+runner = AntigravityTaskWorker(
+    plane,
+    task_id,
+    cwd=worktree,
+    rollover_budget_tokens=120_000,
+)
+await runner.start()
+await runner.deliver(task_prompt)
+```
+
+This adapter is not a scheduler. The caller still owns task dispatch; Vicoa owns routing, context, session lineage, messages, and verification.
 
 Read views:
 
@@ -95,4 +110,4 @@ Context omissions use `over_budget`, `truncated_over_budget`, `stale`, `low_auth
 - A second job scheduler or worker supervisor.
 - The full Command Center UI. The read views above are the current surface.
 
-Migration `b4e7c2a91d18` creates and drops these tables. The store also creates them on open so a disposable SQLite file works without Alembic. Canary evidence is in `CANARY-SKILLS-MEMORY.md`. The live import and rollover record is `LIVE-SKILLS-HANDOFF.md`.
+Migration `b4e7c2a91d18` creates and drops these tables. The store also creates them on open so a disposable SQLite file works without Alembic. Canary evidence is in `CANARY-SKILLS-MEMORY.md`. The live import record is `LIVE-SKILLS-HANDOFF.md`; the automatic two-session proof and exact context metrics are in `AUTOMATIC-ROLLOVER-CANARY.md`.

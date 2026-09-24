@@ -14,6 +14,7 @@ from shared.control_plane.store import (
     LIVE_AGENT_CONTROL_DB,
     ControlPlane,
     ControlPlaneError,
+    redact,
 )
 
 
@@ -34,6 +35,12 @@ def dag(cp: ControlPlane) -> tuple[int, int, int]:
     cp.add_dependency(b["id"], a["id"])
     cp.add_dependency(c["id"], b["id"])
     return a["id"], b["id"], c["id"]
+
+
+def test_secret_redaction_does_not_corrupt_benign_skill_keys() -> None:
+    assert redact("vicoa-task-decomposition") == "vicoa-task-decomposition"
+    assert redact("prefix sk-1234567890 suffix") == "prefix [redacted] suffix"
+    assert redact("token=topsecret") == "[redacted]"
 
 
 def test_two_profiles_are_independent_and_secrets_stay_out(tmp_path: Path) -> None:

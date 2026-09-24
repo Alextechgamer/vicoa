@@ -164,6 +164,8 @@ async def test_turn_posts_text_status_and_usage(fake_binary, tmp_path):
             "max_tokens": None,
             "cost_usd": None,
         }
+        assert session.context_used_tokens == 125
+        assert session.context_max_tokens is None
         assert session.process_alive  # one process serves many turns
         await session.deliver_user_message("again")
         assert client.messages[-1] == "echo: be terse\n\n---\n\nagain"

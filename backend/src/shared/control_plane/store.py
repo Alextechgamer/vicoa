@@ -22,7 +22,8 @@ from pathlib import Path
 from typing import Any
 
 SECRET_RE = re.compile(
-    r"(?i)(sk_live_[A-Za-z0-9]+|sk-[A-Za-z0-9_\-]{8,}|Bearer\s+\S+"
+    r"(?i)((?<![A-Za-z0-9])sk_live_[A-Za-z0-9]+"
+    r"|(?<![A-Za-z0-9])sk-[A-Za-z0-9_\-]{8,}|Bearer\s+\S+"
     r"|(?:api[_-]?key|token|password|secret|authorization)\s*[=:]\s*\S+)"
 )
 PROTECTED_ACTIONS = frozenset({"resume", "message", "route", "kill", "reap", "approve", "mutate"})
@@ -711,6 +712,70 @@ class ControlPlane:
             self._event(db, task_id, f"continued on {account_id} session {session_id}")
         return self.task(task_id)
 
+    def suspend_for_rollover(
+        self,
+        task_id: int,
+        *,
+        packet_id: int,
+        session_id: str,
+    ) -> dict[str, Any]:
+        """Atomically release Session A after a prepared handoff."""
+        from .knowledge import emit
+
+        with self._conn() as db:
+            task = self._task(db, task_id)
+            self._guard(task, "mutate")
+            packet = db.execute("SELECT * FROM handoff_packets WHERE id=?", (packet_id,)).fetchone()
+            if packet is None or int(packet["task_id"]) != int(task_id):
+                raise ControlPlaneError("handoff_mismatch", "the handoff does not belong to this task")
+            if packet["from_session_id"] != session_id:
+                raise ControlPlaneError("handoff_mismatch", "the handoff source session does not match")
+            if packet["status"] not in {"prepared", "validated"}:
+                raise ControlPlaneError("handoff_state", "the handoff is not ready for rollover")
+            if task["session_id"] != session_id:
+                raise ControlPlaneError("session_reused", "the task is no longer owned by Session A")
+            session = db.execute("SELECT * FROM sessions WHERE session_id=?", (session_id,)).fetchone()
+            if session is None or int(session["task_id"]) != int(task_id):
+                raise ControlPlaneError("not_found", "the source session is not registered")
+            if task["worker_status"] == "interrupted" and session["status"] == "rolled_over":
+                return self.task(task_id)
+            if task["worker_status"] not in {"running", "needs_input"}:
+                raise ControlPlaneError("state", "only a live worker can suspend for rollover")
+            updated = db.execute(
+                "UPDATE sessions SET status='rolled_over' WHERE session_id=? AND status='active'",
+                (session_id,),
+            )
+            if updated.rowcount != 1:
+                raise ControlPlaneError("state", "the source session is not active")
+            self._touch(db, task_id, worker_status="interrupted", stale=0, heartbeat_at=_now())
+            if task["account_id"]:
+                db.execute(
+                    "UPDATE accounts SET active_workers=MAX(active_workers-1, 0) WHERE id=?",
+                    (task["account_id"],),
+                )
+            emit(
+                db,
+                self,
+                task_id=task_id,
+                job_id=int(task["job_id"]),
+                session_id=session_id,
+                event_type="session_rolled_over",
+                message=f"session {session_id} rolled over",
+                detail={"packet_id": packet_id},
+            )
+            emit(
+                db,
+                self,
+                task_id=task_id,
+                job_id=int(task["job_id"]),
+                session_id=session_id,
+                event_type="rollover_ready",
+                message=f"handoff {packet_id} is ready for Session B",
+                detail={"packet_id": packet_id, "account_id": task["account_id"]},
+            )
+            self._event(db, task_id, f"suspended for rollover handoff {packet_id}")
+        return self.task(task_id)
+
     def complete_worker(
         self,
         task_id: int,
@@ -964,18 +1029,58 @@ class ControlPlane:
         return self.task(task_id)
 
     def recover_after_restart(self) -> list[int]:
+        """Recover running tasks without duplicating an in-flight handoff."""
+        from .knowledge import emit
+
         recovered: list[int] = []
+        needs_handoff: list[int] = []
         with self._conn() as db:
-            rows = db.execute(
-                "SELECT id FROM tasks WHERE worker_status='running'"
-            ).fetchall()
-            for row in rows:
-                task_id = int(row["id"])
+            rows = db.execute("SELECT * FROM tasks WHERE worker_status='running' ORDER BY id").fetchall()
+            for task in rows:
+                task_id = int(task["id"])
+                packet = db.execute(
+                    """
+                    SELECT * FROM handoff_packets
+                    WHERE task_id=? AND from_session_id=?
+                      AND status IN ('prepared', 'validated')
+                    ORDER BY id DESC LIMIT 1
+                    """,
+                    (task_id, task["session_id"] or ""),
+                ).fetchone()
+                if packet is None:
+                    needs_handoff.append(task_id)
+                else:
+                    session = db.execute(
+                        "SELECT * FROM sessions WHERE session_id=?",
+                        (task["session_id"] or "",),
+                    ).fetchone()
+                    if session is not None and session["status"] == "active":
+                        db.execute("UPDATE sessions SET status='rolled_over' WHERE id=?", (session["id"],))
+                        emit(
+                            db,
+                            self,
+                            task_id=task_id,
+                            job_id=int(task["job_id"]),
+                            session_id=task["session_id"] or "",
+                            event_type="session_rolled_over",
+                            message="restart recovered Session A as rolled over",
+                            detail={"packet_id": int(packet["id"])},
+                        )
+                    emit(
+                        db,
+                        self,
+                        task_id=task_id,
+                        job_id=int(task["job_id"]),
+                        session_id=task["session_id"] or "",
+                        event_type="restart_handoff_recovered",
+                        message=f"restart preserved handoff {packet['id']}",
+                        detail={"packet_id": int(packet["id"]), "duplicate": False},
+                    )
                 self._touch(db, task_id, worker_status="interrupted", stale=1)
                 self._event(db, task_id, "restart recovery; verification rows kept")
                 recovered.append(task_id)
             db.execute("UPDATE accounts SET active_workers=0")
-        self._auto_handoff(recovered, "crash")
+        self._auto_handoff(needs_handoff, "crash")
         return recovered
 
     def _assigned_tasks(self, account_id: str, statuses: tuple[str, ...]) -> list[int]:
@@ -990,7 +1095,8 @@ class ControlPlane:
     def _auto_handoff(self, task_ids: list[int], reason: str) -> None:
         for task_id in task_ids:
             try:
-                self.knowledge.prepare_handoff(task_id, reason=reason)
+                if self.knowledge.pending_handoff(task_id) is None:
+                    self.knowledge.prepare_handoff(task_id, reason=reason)
             except ControlPlaneError:
                 continue
 

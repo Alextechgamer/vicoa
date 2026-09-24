@@ -160,6 +160,8 @@ def test_handoff_validation_resume_and_protected_override(tmp_path: Path) -> Non
     cp.route(task_id)
     cp.start_task(task_id, account_id="canary-a", session_id="old-session")
     prepared = cp.knowledge.prepare_handoff(task_id, reason="manual")
+    assert "fresh session" in prepared["packet"]["next_action"]
+    assert "do not repeat completed work" in prepared["packet"]["next_action"]
     with pytest.raises(ControlPlaneError) as running:
         cp.knowledge.resume_from_handoff(prepared["id"], new_session_id="new-session")
     assert running.value.code == "worker_running"
@@ -301,6 +303,19 @@ def test_domain_routing_excludes_unrelated_skills(tmp_path: Path) -> None:
     second = cp.knowledge.resolve_skills(task_b["id"])
     assert php["id"] not in second["selected_ids"]
     assert roblox["id"] in second["selected_ids"]
+    generic = cp.create_job(project="generic", goal="run deterministic verification")
+    task_c = cp.add_task(
+        generic["id"],
+        title="Generic verification",
+        plan_key="c",
+        prompt="verify two marker files deterministically",
+    )
+    third = cp.knowledge.resolve_skills(task_c["id"])
+    assert php["id"] not in third["selected_ids"]
+    assert any(
+        item["reason"] == "domain_excluded" and item["skill_key"] == "wp-signature"
+        for item in third["skipped"]
+    )
     result = run_canary(tmp_path / "canary.db")
     assert result["passed"], result["checks"]
     with pytest.raises(ControlPlaneError):

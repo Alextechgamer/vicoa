@@ -4,17 +4,17 @@ from __future__ import annotations
 
 from typing import Any
 
-from .knowledge import estimate_tokens
+from .knowledge import CONTEXT_SAFETY_MARGIN, PRESSURE_RATIO, estimate_tokens
 from .store import ControlPlane, ControlPlaneError
 
-ROLLOVER_MARGIN = 1.25
+ROLLOVER_MARGIN = CONTEXT_SAFETY_MARGIN
 LEGACY_ACCOUNTS = frozenset({"agy-1", "agy-2"})
 
 
 def rollover_due(used_tokens: int, budget_tokens: int) -> bool:
     if budget_tokens <= 0:
         return False
-    return (used_tokens * ROLLOVER_MARGIN) / budget_tokens >= 0.85
+    return (used_tokens * ROLLOVER_MARGIN) / budget_tokens >= PRESSURE_RATIO
 
 
 def compare_estimator(samples: list[str], tokenizer=None) -> dict[str, Any]:
