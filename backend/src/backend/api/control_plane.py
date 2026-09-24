@@ -108,6 +108,36 @@ def mcp(body: dict[str, Any], authorization: str | None = Header(default=None)) 
     return _call(str(body.get("tool") or ""), dict(body.get("arguments") or {}), authorization)
 
 
+@router.get("/skills")
+def skills(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    return _call("skills", {}, authorization)
+
+
+@router.get("/memories")
+def memories(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    return _call("memories", {}, authorization)
+
+
+@router.get("/tasks/{task_id}/context")
+def context(task_id: int, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    return _call("context", {"task_id": task_id}, authorization)
+
+
+@router.get("/tasks/{task_id}/handoff")
+def handoff(task_id: int, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    return _call("handoff", {"task_id": task_id}, authorization)
+
+
+@router.get("/tasks/{task_id}/timeline")
+def timeline(task_id: int, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    return _call("timeline", {"task_id": task_id}, authorization)
+
+
+@router.get("/tasks/{task_id}/routing")
+def routing(task_id: int, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    return _call("explain_route", {"task_id": task_id}, authorization)
+
+
 @router.post("/import")
 def import_snapshot(body: dict[str, Any], authorization: str | None = Header(default=None)) -> dict[str, Any]:
     _token_ok(authorization)

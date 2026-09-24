@@ -218,6 +218,15 @@ class ControlPlane:
             Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         with self._conn() as db:
             db.executescript(SCHEMA)
+            from .knowledge import KNOWLEDGE_SCHEMA
+
+            db.executescript(KNOWLEDGE_SCHEMA)
+
+    @property
+    def knowledge(self):
+        from .knowledge import Knowledge
+
+        return Knowledge(self)
 
     def _conn(self):
         if self.dialect == "postgres":
@@ -349,6 +358,7 @@ class ControlPlane:
             if cur.rowcount != 1:
                 raise ControlPlaneError("not_found", f"account {account_id} not found")
             self._audit(db, account_id, "drain", "")
+        self._auto_handoff(self._assigned_tasks(account_id, ("running", "needs_input")), "account_switch")
         return self.account(account_id)
 
     def enable(self, account_id: str) -> dict[str, Any]:
@@ -376,6 +386,7 @@ class ControlPlane:
             )
             if cur.rowcount != 1:
                 raise ControlPlaneError("not_found", f"account {account_id} not found")
+        self._auto_handoff(self._assigned_tasks(account_id, ("running", "needs_input")), "provider_switch")
         return self.account(account_id)
 
     def observe_quota(
@@ -649,6 +660,9 @@ class ControlPlane:
             ).fetchall()
             if any(row["verification_status"] != "passed" for row in deps):
                 raise ControlPlaneError("dependency", "upstream verification has not passed")
+            from .knowledge import assert_fresh_session
+
+            assert_fresh_session(db, task_id, session_id)
             if task["worker_status"] == "running" and task["session_id"] == session_id:
                 return self.task(task_id)
             account = db.execute("SELECT * FROM accounts WHERE id=?", (account_id,)).fetchone()
@@ -747,6 +761,8 @@ class ControlPlane:
                 verification_summary=redact("; ".join(item["summary"] for item in results)[:500]),
             )
             self._event(db, task_id, f"verification {status}")
+        if status == "revision_required":
+            self._auto_handoff([task_id], "verification_failure")
         return {"task_id": task_id, "status": status, "verification_status": status, "idempotent": False, "evidence": evidence}
 
     def route(self, task_id: int, *, override_reason: str = "", pool: str | None = None) -> dict[str, Any]:
@@ -774,9 +790,22 @@ class ControlPlane:
             )
             if override_reason.strip():
                 self._event(db, task_id, f"protected override used for route: {override_reason}")
+        explanations = self.knowledge.explain_route(
+            task_id,
+            chosen=chosen,
+            summary=summary,
+            considered=considered,
+            record=True,
+        )
         if chosen is None:
             raise ControlPlaneError("unroutable", summary)
-        return {"task_id": task_id, "account_id": chosen, "summary": summary, "considered": considered}
+        return {
+            "task_id": task_id,
+            "account_id": chosen,
+            "summary": summary,
+            "considered": considered,
+            "explanations": explanations,
+        }
 
     def open_approval(self, task_id: int, *, prompt_text: str) -> dict[str, Any]:
         fingerprint = hashlib.sha256(prompt_text.encode()).hexdigest()
@@ -903,6 +932,7 @@ class ControlPlane:
                     (task["account_id"],),
                 )
             self._event(db, task_id, "worker crashed; evidence retained")
+        self._auto_handoff([task_id], "crash")
         return self.task(task_id)
 
     def mark_stale(self, task_id: int) -> dict[str, Any]:
@@ -924,7 +954,24 @@ class ControlPlane:
                 self._event(db, task_id, "restart recovery; verification rows kept")
                 recovered.append(task_id)
             db.execute("UPDATE accounts SET active_workers=0")
+        self._auto_handoff(recovered, "crash")
         return recovered
+
+    def _assigned_tasks(self, account_id: str, statuses: tuple[str, ...]) -> list[int]:
+        marks = ",".join("?" for _ in statuses)
+        with self._conn() as db:
+            rows = db.execute(
+                f"SELECT id FROM tasks WHERE account_id=? AND worker_status IN ({marks}) ORDER BY id",
+                (account_id, *statuses),
+            ).fetchall()
+        return [int(row["id"]) for row in rows]
+
+    def _auto_handoff(self, task_ids: list[int], reason: str) -> None:
+        for task_id in task_ids:
+            try:
+                self.knowledge.prepare_handoff(task_id, reason=reason)
+            except ControlPlaneError:
+                continue
 
     def cleanup_session(self, task_id: int, *, evidence_root: str, override_reason: str = "") -> dict[str, Any]:
         with self._conn() as db:

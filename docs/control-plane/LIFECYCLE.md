@@ -35,4 +35,12 @@ same row. A failed row can be retried without creating another row.
 
 `recover_after_restart` marks `running` workers `interrupted` and clears
 account capacity. It does not start a new worker. Queued messages, approvals,
-and verification rows stay.
+and verification rows stay. It also prepares a crash handoff packet. That
+packet does not launch a replacement session.
+
+## Continuation
+
+Skills, memory, context packs, and handoff packets live on the same task.
+A replacement session is started only through `start_task`, and only with a
+new session id. See `docs/control-plane/SKILLS-MEMORY-CONTEXT.md`.
+

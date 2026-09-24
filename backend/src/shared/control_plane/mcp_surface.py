@@ -33,6 +33,12 @@ TOOL_NAMES = (
     "job",
     "profiles",
     "deny",
+    "skills",
+    "memories",
+    "context",
+    "handoff",
+    "timeline",
+    "explain_route",
 )
 
 REJECTED = frozenset(
@@ -129,4 +135,19 @@ def dispatch(plane: ControlPlane, tool: str, arguments: dict[str, Any] | None = 
         return {"blockers": plane.blockers()}
     if tool == "retry_eligible":
         return plane.retry_verification(int(args["task_id"]), list(args.get("checks") or []))
+    if tool == "skills":
+        return {"skills": plane.knowledge.list_skills()}
+    if tool == "memories":
+        return {"memories": plane.knowledge.list_memories()}
+    if tool == "context":
+        return plane.knowledge.build_context(
+            int(args["task_id"]),
+            budget_tokens=int(args.get("budget_tokens") or 1200),
+        )
+    if tool == "handoff":
+        return {"packets": plane.knowledge.list_handoffs(int(args["task_id"]))}
+    if tool == "timeline":
+        return {"events": plane.knowledge.timeline(int(args["task_id"]))}
+    if tool == "explain_route":
+        return {"explanations": plane.knowledge.explain_route(int(args["task_id"]))}
     raise ControlPlaneError("forbidden", tool)
