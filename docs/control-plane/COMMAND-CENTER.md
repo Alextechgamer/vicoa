@@ -47,9 +47,11 @@ Rotate the operator password by writing a new verifier and restarting only this 
 
 ## Event stream
 
-The earlier stream closed itself after 20 seconds. The browser then reconnected. The production handler stays open, sends a heartbeat comment every 15 seconds, and includes an event id. A reconnect sends `Last-Event-ID` or `after` and does not replay events already delivered.
+The earlier stream closed itself after 20 seconds. The production handler stays open and sends a heartbeat comment about every 15 seconds.
 
-The production proof held one connection for 610.7 seconds and received 39 heartbeats. Two disposable canary events arrived while it was open. The reconnect resumed from the saved cursor.
+The uninterrupted proof started at `2026-09-24T16:14:04Z` and ended at `2026-09-24T16:24:14Z`. One connection stayed open for 609.9 seconds. It received 38 heartbeats at an average cadence of 16.5 seconds. The reconnect count was 0. A disposable canary written during the window was delivered on that same connection. Reconnecting from the saved cursor returned 0 prior events.
+
+Gitleaks 8.28.0 scanned the branch patch from `2f66d2c` to `HEAD` and reported no leaks. The binary stayed in `/tmp` and was not committed.
 
 ## Task detail
 
