@@ -6,10 +6,8 @@ Reads sources. Does not modify them and does not copy a second library.
 from __future__ import annotations
 
 import hashlib
-import re
 from pathlib import Path
 
-from .knowledge import contains_secret
 from .store import ControlPlane, ControlPlaneError
 
 ACTIVE = {
