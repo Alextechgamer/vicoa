@@ -49,6 +49,8 @@ Rotate the operator password by writing a new verifier and restarting only this 
 
 The earlier stream closed itself after 20 seconds. The browser then reconnected. The production handler stays open, sends a heartbeat comment every 15 seconds, and includes an event id. A reconnect sends `Last-Event-ID` or `after` and does not replay events already delivered.
 
+The production proof held one connection for 610.7 seconds and received 39 heartbeats. Two disposable canary events arrived while it was open. The reconnect resumed from the saved cursor.
+
 ## Task detail
 
 Conversation, activity, verification, and files come from the control plane. Vicoa did not retain a full provider transcript, so the conversation view shows session boundaries and stored messages instead of inventing chat text. File diffs are limited to the task worktree. Path traversal and symlink escapes are rejected.
