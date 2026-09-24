@@ -1,0 +1,18 @@
+[Unit]
+Description=Vicoa ChatGPT MCP adapter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.vicoa/work/vicoa-chatgpt-mcp/backend
+Environment=PYTHONPATH=%h/.vicoa/work/vicoa-chatgpt-mcp/backend/src
+Environment=PYTHONDONTWRITEBYTECODE=1
+EnvironmentFile=%h/.vicoa/chatgpt-mcp.env
+ExecStart=%h/.vicoa/mcp-venv/bin/python -m uvicorn shared.control_plane.chatgpt_mcp_app:app --host 127.0.0.1 --port 8098 --no-access-log
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target
