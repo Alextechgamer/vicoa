@@ -57,7 +57,7 @@ Imported Vicoa account records named `agy-1` and `agy-2` pointed at the live run
 
 Task 113 has no `BATCHIDEO-BASELINE-READINESS.md`. The paid baseline render remains an owner blocker. Vicoa job 106 records that successor and is not started.
 
-Task 114 has `agent-control-evidence/TILLPRESS-MONOREPO-CURRENT-STATE.md`. The OrderRing activation path now verifies the server payload before recording `was_active`. Tests: `php tests/run.php` passed 924, failed 0. The patch is on `fix/orderring-license-verify-order` and was not deployed. StoreCanvas and OrderBay still have the old ordering; Vicoa jobs 108 and 109 record those successors and were not started.
+Task 114 has `agent-control-evidence/TILLPRESS-MONOREPO-CURRENT-STATE.md`. The OrderRing activation path now verifies the server payload before recording `was_active`. StoreCanvas branch `fix/storecanvas-license-verify-order` (`e0e24c3`) and OrderBay branch `fix/orderbay-license-verify-order` (`d4a0a69`) have the same ordering fix. Neither is merged or deployed. The shared template and Checkout Sentinel still have the old order; those successor jobs are held.
 
 ## Live session map
 
