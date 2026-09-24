@@ -13,6 +13,7 @@ import {
   Settings,
   Share,
   Waypoints,
+  Activity,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -1273,6 +1274,18 @@ export function SidebarSessions({
               )}
             >
               <Waypoints className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              title="Command Center"
+              aria-label="Command Center"
+              onClick={() => router.push('/dashboard/command')}
+              className={cn(
+                'flex h-6 w-6 cursor-pointer items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-foreground/[0.06] dark:hover:bg-foreground/10 hover:text-foreground',
+                pathname === '/dashboard/command' && ITEM_SELECTED,
+              )}
+            >
+              <Activity className="h-3.5 w-3.5" />
             </button>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>

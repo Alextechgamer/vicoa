@@ -138,6 +138,48 @@ def routing(task_id: int, authorization: str | None = Header(default=None)) -> d
     return _call("explain_route", {"task_id": task_id}, authorization)
 
 
+@router.get("/command-center/snapshot")
+def command_snapshot(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    _token_ok(authorization)
+    from shared.control_plane.command_center import snapshot
+
+    return snapshot(get_plane())
+
+
+@router.get("/command-center/events")
+def command_events(after: str = "0", authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    _token_ok(authorization)
+    from shared.control_plane.command_center import events_since
+
+    return events_since(get_plane(), after)
+
+
+@router.get("/command-center/tasks/{task_id}")
+def command_task(task_id: int, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    _token_ok(authorization)
+    from shared.control_plane.command_center import task_view
+
+    try:
+        return task_view(get_plane(), task_id)
+    except ControlPlaneError as exc:
+        status = 404 if exc.code == "not_found" else 400
+        raise HTTPException(status_code=status, detail=exc.code) from exc
+
+
+@router.post("/command-center/tasks/{task_id}/actions")
+def command_action(task_id: int, body: dict[str, Any], authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    _token_ok(authorization)
+    from shared.control_plane.command_center import assert_action_allowed
+
+    action = str(body.get("action") or "")
+    try:
+        assert_action_allowed(get_plane(), task_id, action)
+    except ControlPlaneError as exc:
+        status = 403 if exc.code in {"forbidden", "locked", "legacy_account"} else 400
+        raise HTTPException(status_code=status, detail=exc.code) from exc
+    raise HTTPException(status_code=409, detail="action_not_enabled")
+
+
 @router.post("/import")
 def import_snapshot(body: dict[str, Any], authorization: str | None = Header(default=None)) -> dict[str, Any]:
     _token_ok(authorization)
