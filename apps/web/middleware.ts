@@ -42,7 +42,7 @@ export async function middleware(request: NextRequest) {
   }
 
   const { pathname } = request.nextUrl;
-  const isProtectedRoute = pathname.startsWith(protectedRoutes);
+  const isProtectedRoute = pathname.startsWith(protectedRoutes) && !pathname.startsWith('/dashboard/command');
 
   if (isBuiltinAuth()) {
     return builtinMiddleware(request, isProtectedRoute);

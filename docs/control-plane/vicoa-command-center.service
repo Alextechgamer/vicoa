@@ -1,0 +1,18 @@
+[Unit]
+Description=Vicoa Command Center production web
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/alex/workspace/vicoa/apps/web/.next/standalone
+EnvironmentFile=/home/alex/.vicoa/command-center.env
+Environment=NODE_ENV=production
+Environment=PORT=3012
+Environment=HOSTNAME=127.0.0.1
+ExecStart=/home/alex/.hermes/node/bin/node /home/alex/workspace/vicoa/apps/web/.next/standalone/server.js
+Restart=on-failure
+RestartSec=5
+KillMode=process
+
+[Install]
+WantedBy=default.target

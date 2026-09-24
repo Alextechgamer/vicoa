@@ -140,6 +140,7 @@ class AntigravitySession:
         permission_mode: Optional[str] = None,
         system_prompt: Optional[str] = None,
         conversation_id: Optional[str] = None,
+        process_env: dict[str, str] | None = None,
     ) -> None:
         self.vicoa_client = vicoa_client
         self.instance_id = instance_id
@@ -149,6 +150,9 @@ class AntigravitySession:
         self.model = model
         self.permission_mode = permission_mode
         self.system_prompt = system_prompt
+        # Keep authenticated provider profiles isolated without mutating the
+        # process-wide environment when Vicoa runs profiles concurrently.
+        self.process_env = dict(process_env) if process_env is not None else None
         #: The agent's own conversation handle. Supplied on a Vicoa resume,
         #: otherwise learned from the first ``init`` and persisted.
         self.conversation_id = conversation_id
@@ -208,6 +212,18 @@ class AntigravitySession:
     def turn_active(self) -> bool:
         return self._turn_active
 
+    @property
+    def context_used_tokens(self) -> int | None:
+        """Latest point-in-time context fill reported by the agent stream."""
+        context = self._usage.context or {}
+        value = context.get("used_tokens")
+        return int(value) if isinstance(value, (int, float)) else None
+
+    @property
+    def context_max_tokens(self) -> int | None:
+        """Known context-window size for the effective model, when available."""
+        return self._usage.context_max_tokens
+
     def stderr_tail(self) -> str:
         if not self._stderr_lines:
             return ""
@@ -239,7 +255,7 @@ class AntigravitySession:
         process = await asyncio.create_subprocess_exec(
             *command,
             cwd=self.cwd,
-            env=dict(os.environ),
+            env=dict(self.process_env) if self.process_env is not None else dict(os.environ),
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,

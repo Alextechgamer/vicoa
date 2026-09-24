@@ -1891,6 +1891,19 @@ class BackendAPI {
     );
   }
 
+  async controlPlaneStatus(): Promise<{
+    accounts: Array<{ id: string; provider: string; enabled: number; constrained: number; drained: number; auth_state: string; active_workers: number; max_workers: number; quota_state: string }>;
+    jobs: Array<{ id: number; project: string; status: string; import_hold: number; shadow: number; source_id: string }>;
+    tasks: Array<{ id: number; title: string; worker_status: string; verification_status: string; account_id: string | null; session_id: string; worktree_set: number; protected: number; owner_only: number; import_hold: number; policy: string }>;
+    approvals: Array<{ id: number; task_id: number; status: string; permanent: number; consumed: number }>;
+    health: { stale_sessions: number[]; unconsumed_steers: number[]; protected_tasks: number[]; owner_blockers: Array<{ task_id: number; blocker: string }> };
+    blockers: Array<{ kind: string; task_id: number; reason?: string }>;
+    shadow_jobs: number[];
+    message_states: Record<string, number>;
+  }> {
+    return this.request('/api/v1/control-plane/status');
+  }
+
   // --- Share links (collaboration §3.4, P4) --------------------------------
 
   async createShareLink(data: CreateShareLinkRequest): Promise<ShareLinkResponse> {
