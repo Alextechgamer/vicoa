@@ -300,10 +300,21 @@ class VicoaMcp:
             raise
 
     async def finish_worker(self, task_id: int, checks: list[dict[str, Any]]) -> dict[str, Any]:
-        _task_or_refuse(self.plane, task_id)
+        task = _task_or_refuse(self.plane, task_id)
         worker = self.workers.get(int(task_id))
         if worker is None:
-            raise ToolError("state: no active MCP-owned worker")
+            if task["worker_status"] != "candidate_complete":
+                raise ToolError("state: no active or completed MCP-owned worker")
+            job = self.plane.job(int(task["job_id"]))
+            if job.get("manager_id") != controller_id():
+                raise ToolError("refused: completed task is not owned by this controller")
+            try:
+                verified = self.plane.retry_verification(int(task_id), checks)
+                return _public(
+                    {"task": self.plane.task(int(task_id)), "verification": verified}
+                )
+            except ControlPlaneError as exc:
+                _fail(exc)
         try:
             result = await worker.finish(checks, output="completed through ChatGPT Vicoa MCP")
             return _public(result)
@@ -340,10 +351,10 @@ class VicoaMcp:
         except ControlPlaneError as exc:
             _fail(exc)
 
-    def retry_task(self, task_id: int) -> dict[str, Any]:
+    def retry_task(self, task_id: int, checks: list[dict[str, Any]]) -> dict[str, Any]:
         _task_or_refuse(self.plane, task_id)
         try:
-            return _public(self.plane.retry_verification(int(task_id), []))
+            return _public(self.plane.retry_verification(int(task_id), checks))
         except ControlPlaneError as exc:
             _fail(exc)
 

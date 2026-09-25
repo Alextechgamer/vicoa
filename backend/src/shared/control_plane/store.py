@@ -811,10 +811,19 @@ class ControlPlane:
             self._event(db, task_id, "worker finished; verification still pending; dependencies stay locked")
         return self.task(task_id)
 
-    def verify_task(self, task_id: int, checks: list[dict[str, Any]], *, worktree: str | None = None) -> dict[str, Any]:
+    def verify_task(
+        self,
+        task_id: int,
+        checks: list[dict[str, Any]],
+        *,
+        worktree: str | None = None,
+        force: bool = False,
+    ) -> dict[str, Any]:
+        if not checks:
+            raise ControlPlaneError("rejected", "at least one verification check is required")
         with self._conn() as db:
             task = self._task(db, task_id)
-            if task["verification_status"] == "passed":
+            if task["verification_status"] == "passed" and not force:
                 prior = db.execute(
                     "SELECT evidence_json FROM verifications WHERE task_id=? AND status='passed' ORDER BY id DESC LIMIT 1",
                     (task_id,),
@@ -1424,13 +1433,28 @@ class ControlPlane:
         return {"stopped": stopped, "attention": attention, "retried": retried, "loop": False}
 
     def retry_verification(self, task_id: int, checks: list[dict[str, Any]]) -> dict[str, Any]:
+        if not checks:
+            raise ControlPlaneError("rejected", "at least one verification check is required")
         task = self.task(task_id)
+        invalid_prior_pass = False
         if task["verification_status"] == "passed":
-            return self.verify_task(task_id, checks)
+            passed = [row for row in task["evidence"] if row["status"] == "passed"]
+            latest = passed[-1] if passed else None
+            prior_checks: Any = None
+            if latest is not None:
+                try:
+                    prior_checks = json.loads(str(latest["evidence_json"])).get("checks")
+                except (json.JSONDecodeError, AttributeError, TypeError):
+                    prior_checks = None
+            if isinstance(prior_checks, list) and prior_checks:
+                return self.verify_task(task_id, checks)
+            invalid_prior_pass = True
         if task["owner_only"]:
             raise ControlPlaneError("owner_only", "owner-only blocker stops automation")
         if any(check.get("type") == "command" for check in checks):
             raise ControlPlaneError("unsafe_retry", "command verification is not auto-retried")
+        if invalid_prior_pass:
+            return self.verify_task(task_id, checks, force=True)
         return self.verify_task(task_id, checks)
 
     def health(self) -> dict[str, Any]:
@@ -1787,6 +1811,39 @@ def _run_check(root: Path, task: sqlite3.Row, check: dict[str, Any]) -> dict[str
                 return {"type": kind, "passed": False, "summary": "missing file"}
             passed = expected in path.read_text()
             return {"type": kind, "passed": passed, "summary": f"contains={passed}"}
+        if kind == "file_equals":
+            path = _safe(root, str(check.get("path") or ""))
+            expected = check.get("text")
+            if not isinstance(expected, str):
+                raise ValueError("file_equals.text must be a string")
+            if not path.is_file():
+                return {"type": kind, "passed": False, "summary": "missing file"}
+            passed = path.read_bytes() == expected.encode("utf-8")
+            return {"type": kind, "passed": passed, "summary": f"equals={passed}"}
+        if kind == "file_size":
+            path = _safe(root, str(check.get("path") or ""))
+            expected = check.get("bytes")
+            if isinstance(expected, bool) or not isinstance(expected, int) or expected < 0:
+                raise ValueError("file_size.bytes must be a non-negative integer")
+            if not path.is_file():
+                return {"type": kind, "passed": False, "summary": "missing file"}
+            actual = path.stat().st_size
+            passed = actual == expected
+            return {
+                "type": kind,
+                "passed": passed,
+                "summary": f"size={actual} expected={expected}",
+            }
+        if kind == "file_sha256":
+            path = _safe(root, str(check.get("path") or ""))
+            expected = str(check.get("sha256") or "").lower()
+            if re.fullmatch(r"[0-9a-f]{64}", expected) is None:
+                raise ValueError("file_sha256.sha256 must be 64 lowercase hex characters")
+            if not path.is_file():
+                return {"type": kind, "passed": False, "summary": "missing file"}
+            actual = hashlib.sha256(path.read_bytes()).hexdigest()
+            passed = actual == expected
+            return {"type": kind, "passed": passed, "summary": f"sha256={passed}"}
         if kind in {"git_changed", "git_changed_path"}:
             return _git_changed(root, task, str(check.get("path") or ""))
         if kind == "git_diff_nonempty":

@@ -24,6 +24,12 @@ These Agent Control-shaped actions have no safe existing Vicoa method, so they a
 
 Shell, SQL, filesystem, and worktree deletion are not registered.
 
+## Verification retries
+
+Verification requires at least one check; an empty check list is rejected and cannot create a pass. vicoa_retry_task requires the caller to resubmit checks instead of inventing an empty retry.
+
+vicoa_finish_worker can also resubmit verification after an MCP-owned worker has already completed, but only while the job is still owned by the injected controller identity. Post-completion retries refuse command checks and support exact file verification with file_equals, file_size, and file_sha256.
+
 ## Held work
 
 Writes refuse task ids 6, 113, 114, and 124, job ids 70, 71, 106, 111, and 125, and any task that is protected, owner-only, or import-held. The adapter does not accept an override reason.

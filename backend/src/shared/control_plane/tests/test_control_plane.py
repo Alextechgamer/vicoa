@@ -130,6 +130,23 @@ def test_verification_checks(tmp_path: Path) -> None:
     assert found["verification_status"] == "passed"
     exact = cp.verify_task(task("exact"), [{"type": "file_contains", "path": "marker.txt", "text": "EXACT-MARKER"}], worktree=root)
     assert exact["verification_status"] == "passed"
+    exact_bytes = cp.verify_task(
+        task("exact-bytes"),
+        [
+            {"type": "file_equals", "path": "marker.txt", "text": "EXACT-MARKER\n"},
+            {"type": "file_size", "path": "marker.txt", "bytes": 13},
+            {
+                "type": "file_sha256",
+                "path": "marker.txt",
+                "sha256": hashlib.sha256(b"EXACT-MARKER\n").hexdigest(),
+            },
+        ],
+        worktree=root,
+    )
+    assert exact_bytes["verification_status"] == "passed"
+    with pytest.raises(ControlPlaneError) as empty:
+        cp.verify_task(task("empty-checks"), [], worktree=root)
+    assert empty.value.code == "rejected"
     unchanged = cp.verify_task(task("no-diff"), [{"type": "git_changed", "path": "missing.txt"}], worktree=root)
     assert unchanged["verification_status"] == "revision_required"
     subprocess.run(["git", "add", "marker.txt"], cwd=root, check=True)
@@ -150,6 +167,49 @@ def test_verification_checks(tmp_path: Path) -> None:
     assert again["idempotent"] is True
     with pytest.raises(ControlPlaneError):
         cp.verify_task(task("escape"), [{"type": "file_exists", "path": "../etc/passwd"}], worktree=root)
+
+
+def test_retry_verification_repairs_legacy_empty_pass(tmp_path: Path) -> None:
+    cp = plane(tmp_path)
+    accounts(cp)
+    root = tmp_path / "retry-work"
+    root.mkdir()
+    artifact = root / "artifact.txt"
+    artifact.write_bytes(b"RETRY-OK\n")
+    job = cp.create_job(project=str(root), goal="repair empty verification")
+    task = cp.add_task(job["id"], title="repair", plan_key="repair")
+    cp.start_task(task["id"], account_id="agy-1", session_id="repair")
+    cp.complete_worker(task["id"], worktree_path=str(root), output="done")
+
+    with pytest.raises(ControlPlaneError) as empty:
+        cp.retry_verification(task["id"], [])
+    assert empty.value.code == "rejected"
+
+    with cp._conn() as db:
+        db.execute(
+            "INSERT INTO verifications(task_id, status, evidence_json, created_at) VALUES(?,?,?,datetime('now'))",
+            (task["id"], "passed", '{"checks":[],"idempotent":false}'),
+        )
+        db.execute(
+            "UPDATE tasks SET verification_status='passed' WHERE id=?",
+            (task["id"],),
+        )
+
+    repaired = cp.retry_verification(
+        task["id"],
+        [
+            {"type": "file_equals", "path": "artifact.txt", "text": "RETRY-OK\n"},
+            {"type": "file_size", "path": "artifact.txt", "bytes": 9},
+            {
+                "type": "file_sha256",
+                "path": "artifact.txt",
+                "sha256": hashlib.sha256(b"RETRY-OK\n").hexdigest(),
+            },
+        ],
+    )
+    assert repaired["verification_status"] == "passed"
+    assert repaired["idempotent"] is False
+    assert len(repaired["evidence"]["checks"]) == 3
 
 
 def test_approvals(tmp_path: Path) -> None:

@@ -193,6 +193,54 @@ def test_inprocess_mcp_client_creates_a_job(tmp_path: Path, monkeypatch: pytest.
     assert plane.jobs()
 
 
+def test_finish_worker_repairs_completed_empty_pass(tmp_path: Path) -> None:
+    import asyncio
+    import hashlib
+
+    plane = _plane(tmp_path)
+    root = tmp_path / "canary"
+    root.mkdir()
+    artifact = root / "mcp-dispatch.txt"
+    artifact.write_bytes(b"CHATGPT-VICOA-MCP-OK\n")
+    job = plane.create_job(project=str(root), goal="repair completed verification")
+    plane.claim_job(job["id"], controller_id())
+    task = plane.add_task(job["id"], title="canary", plan_key="canary")
+    plane.start_task(task["id"], account_id="vicoa-agy-1", session_id="done")
+    plane.complete_worker(task["id"], worktree_path=str(root), output="done")
+
+    with plane._conn() as db:
+        db.execute(
+            "INSERT INTO verifications(task_id, status, evidence_json, created_at) VALUES(?,?,?,datetime('now'))",
+            (task["id"], "passed", '{"checks":[],"idempotent":false}'),
+        )
+        db.execute(
+            "UPDATE tasks SET verification_status='passed' WHERE id=?",
+            (task["id"],),
+        )
+
+    checks = [
+        {
+            "type": "file_equals",
+            "path": "mcp-dispatch.txt",
+            "text": "CHATGPT-VICOA-MCP-OK\n",
+        },
+        {"type": "file_size", "path": "mcp-dispatch.txt", "bytes": 21},
+        {
+            "type": "file_sha256",
+            "path": "mcp-dispatch.txt",
+            "sha256": hashlib.sha256(b"CHATGPT-VICOA-MCP-OK\n").hexdigest(),
+        },
+    ]
+    adapter = VicoaMcp(plane)
+    repaired = asyncio.run(adapter.finish_worker(task["id"], checks))
+    assert repaired["verification"]["verification_status"] == "passed"
+    assert repaired["verification"]["idempotent"] is False
+    assert len(repaired["verification"]["evidence"]["checks"]) == 3
+
+    with pytest.raises(Exception, match="at least one verification check"):
+        adapter.retry_task(task["id"], [])
+
+
 def test_response_redacts_configured_token(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     token = "z" * 32
     monkeypatch.setenv("VICOA_MCP_TOKEN", token)
