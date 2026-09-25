@@ -103,6 +103,7 @@ def test_server_surface_excludes_forbidden_tools(tmp_path: Path, monkeypatch: py
     listed = server._tool_manager.list_tools()
     names = {tool.name for tool in listed}
     assert "vicoa_claim_job" in names
+    assert {"vicoa_start_worker", "vicoa_deliver_messages", "vicoa_finish_worker"} <= names
     assert names.isdisjoint(FORBIDDEN_TOOLS)
     blob = json.dumps(sorted(names))
     assert "shell" not in blob
