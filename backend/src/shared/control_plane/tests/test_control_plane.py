@@ -212,6 +212,57 @@ def test_retry_verification_repairs_legacy_empty_pass(tmp_path: Path) -> None:
     assert len(repaired["evidence"]["checks"]) == 3
 
 
+def test_job_status_rolls_up_from_verified_tasks(tmp_path: Path) -> None:
+    cp = plane(tmp_path)
+    accounts(cp)
+    root = tmp_path / "job-rollup"
+    root.mkdir()
+    job = cp.create_job(project=str(root), goal="finish every task")
+    first = cp.add_task(job["id"], title="first", plan_key="first")
+    second = cp.add_task(job["id"], title="second", plan_key="second")
+
+    cp.start_task(first["id"], account_id="agy-1", session_id="first")
+    cp.complete_worker(first["id"], worktree_path=str(root), output="first done")
+    first_result = cp.verify_task(first["id"], [{"type": "worker_output", "contains": "first done"}])
+    assert first_result["verification_status"] == "passed"
+    assert cp.job(job["id"])["status"] == "planned"
+
+    cp.start_task(second["id"], account_id="agy-2", session_id="second")
+    cp.complete_worker(second["id"], worktree_path=str(root), output="second done")
+    second_result = cp.verify_task(second["id"], [{"type": "worker_output", "contains": "second done"}])
+    assert second_result["verification_status"] == "passed"
+    assert cp.job(job["id"])["status"] == "completed"
+
+    added = cp.add_task(job["id"], title="late", plan_key="late")
+    assert cp.job(job["id"])["status"] == "planned"
+    cp.start_task(added["id"], account_id="agy-1", session_id="late")
+    cp.complete_worker(added["id"], worktree_path=str(root), output="late done")
+    cp.verify_task(added["id"], [{"type": "worker_output", "contains": "late done"}])
+    assert cp.job(job["id"])["status"] == "completed"
+
+
+def test_idempotent_verification_reconciles_legacy_planned_job(tmp_path: Path) -> None:
+    cp = plane(tmp_path)
+    accounts(cp)
+    root = tmp_path / "legacy-rollup"
+    root.mkdir()
+    job = cp.create_job(project=str(root), goal="legacy completion")
+    task = cp.add_task(job["id"], title="only", plan_key="only")
+    cp.start_task(task["id"], account_id="agy-1", session_id="only")
+    cp.complete_worker(task["id"], worktree_path=str(root), output="done")
+    cp.verify_task(task["id"], [{"type": "worker_output", "contains": "done"}])
+    assert cp.job(job["id"])["status"] == "completed"
+    evidence_before = list(cp.task(task["id"])["evidence"])
+
+    with cp._conn() as db:
+        db.execute("UPDATE jobs SET status='planned' WHERE id=?", (job["id"],))
+
+    result = cp.verify_task(task["id"], [{"type": "worker_output", "contains": "done"}])
+    assert result["idempotent"] is True
+    assert cp.job(job["id"])["status"] == "completed"
+    assert cp.task(task["id"])["evidence"] == evidence_before
+
+
 def test_approvals(tmp_path: Path) -> None:
     cp = plane(tmp_path)
     accounts(cp)

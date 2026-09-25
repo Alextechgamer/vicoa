@@ -494,6 +494,29 @@ class ControlPlane:
             rows = db.execute("SELECT id FROM jobs ORDER BY id").fetchall()
         return [self.job(int(row["id"])) for row in rows]
 
+    def _refresh_job_status(self, db: sqlite3.Connection, job_id: int) -> None:
+        job = db.execute(
+            "SELECT status, shadow, import_hold FROM jobs WHERE id=?",
+            (job_id,),
+        ).fetchone()
+        if job is None or job["shadow"] or job["import_hold"]:
+            return
+        tasks = db.execute(
+            "SELECT verification_status FROM tasks WHERE job_id=? ORDER BY id",
+            (job_id,),
+        ).fetchall()
+        complete = bool(tasks) and all(row["verification_status"] == "passed" for row in tasks)
+        if complete and job["status"] != "completed":
+            db.execute(
+                "UPDATE jobs SET status='completed', updated_at=? WHERE id=?",
+                (_now(), job_id),
+            )
+        elif not complete and job["status"] == "completed":
+            db.execute(
+                "UPDATE jobs SET status='planned', updated_at=? WHERE id=?",
+                (_now(), job_id),
+            )
+
     def add_task(
         self,
         job_id: int,
@@ -557,6 +580,7 @@ class ControlPlane:
             )
             task_id = int(cur.lastrowid)
             self._event(db, task_id, f"task created status={worker_status}")
+            self._refresh_job_status(db, job_id)
         return self.task(task_id)
 
     def task(self, task_id: int) -> dict[str, Any]:
@@ -828,6 +852,7 @@ class ControlPlane:
                     "SELECT evidence_json FROM verifications WHERE task_id=? AND status='passed' ORDER BY id DESC LIMIT 1",
                     (task_id,),
                 ).fetchone()
+                self._refresh_job_status(db, int(task["job_id"]))
                 return {
                     "task_id": task_id,
                     "status": "passed",
@@ -856,6 +881,7 @@ class ControlPlane:
                 verification_summary=redact("; ".join(item["summary"] for item in results)[:500]),
             )
             self._event(db, task_id, f"verification {status}")
+            self._refresh_job_status(db, int(task["job_id"]))
         if status == "revision_required":
             self._auto_handoff([task_id], "verification_failure")
         return {"task_id": task_id, "status": status, "verification_status": status, "idempotent": False, "evidence": evidence}
