@@ -6,7 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from shared.control_plane.chatgpt_mcp import FORBIDDEN_TOOLS, VicoaMcp, build_app, build_server, controller_id
+from shared.control_plane.chatgpt_mcp import (
+    FORBIDDEN_TOOLS,
+    VicoaMcp,
+    build_app,
+    build_server,
+    controller_id,
+)
 from shared.control_plane.store import ControlPlane
 
 
@@ -131,6 +137,31 @@ def test_bearer_guard_rejects_missing_and_forwarded(tmp_path: Path, monkeypatch:
     scope["headers"] = [(b"x-forwarded-for", b"1.2.3.4"), (b"authorization", f"Bearer {token}".encode())]
     asyncio.run(guard(scope, receive, send))
     assert seen == [403]
+
+
+def test_well_known_metadata_is_plain_404(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    monkeypatch.setenv("VICOA_MCP_TOKEN", "w" * 32)
+    guard = build_app(_plane(tmp_path))
+    seen: list[int] = []
+
+    async def send(message: dict) -> None:
+        if message["type"] == "http.response.start":
+            seen.append(message["status"])
+
+    async def receive() -> dict:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    scope = {
+        "type": "http",
+        "client": ("127.0.0.1", 9),
+        "headers": [],
+        "method": "GET",
+        "path": "/.well-known/oauth-protected-resource/mcp",
+    }
+    asyncio.run(guard(scope, receive, send))
+    assert seen == [404]
 
 
 def test_inprocess_mcp_client_creates_a_job(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

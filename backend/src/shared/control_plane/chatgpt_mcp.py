@@ -18,7 +18,12 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
-from shared.control_plane.store import LIVE_AGENT_CONTROL_DB, ControlPlane, ControlPlaneError, redact
+from shared.control_plane.store import (
+    LIVE_AGENT_CONTROL_DB,
+    ControlPlane,
+    ControlPlaneError,
+    redact,
+)
 
 HELD_TASK_IDS = frozenset({6, 113, 114, 124})
 HELD_JOB_IDS = frozenset({70, 71, 106, 111, 125})
@@ -378,6 +383,10 @@ class BearerGuard:
         if scope.get("type") != "http":
             await self.app(scope, receive, send)
             return
+        path = str(scope.get("path") or "")
+        if "/.well-known/" in path:
+            await _not_found(send)
+            return
         client = scope.get("client") or ("", 0)
         if client[0] not in {"127.0.0.1", "::1"}:
             await _reject(send, 403)
@@ -402,6 +411,17 @@ async def _reject(send: Any, status: int) -> None:
         }
     )
     await send({"type": "http.response.body", "body": b'{"error":"unauthorized"}'})
+
+
+async def _not_found(send: Any) -> None:
+    await send(
+        {
+            "type": "http.response.start",
+            "status": 404,
+            "headers": [(b"content-type", b"application/json")],
+        }
+    )
+    await send({"type": "http.response.body", "body": b'{"error":"not_found"}'})
 
 
 def build_app(plane: ControlPlane | None = None) -> BearerGuard:

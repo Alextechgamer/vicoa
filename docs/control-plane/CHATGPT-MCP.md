@@ -30,4 +30,8 @@ Writes refuse task ids 6, 113, 114, and 124, job ids 70, 71, 106, 111, and 125, 
 
 ## Tunnel
 
-The existing tunnel still serves Agent Control on channel `main` at `127.0.0.1:8082`. A Vicoa channel is a separate local URL. Do not replace `/` on Tailscale Serve and do not enable Funnel.
+The existing OpenAI Secure MCP Tunnel now points its `main` channel at the Vicoa adapter on `127.0.0.1:8098/mcp`. The tunnel client injects the local bearer with `mcp.extra_headers`; the bearer is not stored in the tunnel profile or exposed to ChatGPT. Agent Control remains running separately on `127.0.0.1:8082` as a caretaker service and is not used for new Vicoa work.
+
+The Vicoa adapter returns plain `404` responses for `/.well-known/*` metadata paths so the tunnel treats it as a private non-OAuth MCP server while still requiring the bearer on `/mcp`. Do not replace `/` on Tailscale Serve and do not enable Funnel.
+
+Rollback is scoped: remove `/etc/systemd/system/tunnel-client.service.d/10-vicoa.conf`, run `systemctl daemon-reload`, and restart only `tunnel-client.service`; this restores the prior Agent Control tunnel profile without restarting Agent Control itself.
