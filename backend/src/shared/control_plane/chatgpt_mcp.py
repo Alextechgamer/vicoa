@@ -18,6 +18,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
+from shared.control_plane.antigravity_worker import AntigravityTaskWorker
 from shared.control_plane.store import (
     LIVE_AGENT_CONTROL_DB,
     ControlPlane,
@@ -123,6 +124,7 @@ def _account_or_refuse(plane: ControlPlane, account_id: str, *, action: str) -> 
 class VicoaMcp:
     def __init__(self, plane: ControlPlane):
         self.plane = plane
+        self.workers: dict[int, AntigravityTaskWorker] = {}
 
     def status(self) -> dict[str, Any]:
         data = self.plane.status()
@@ -261,6 +263,55 @@ class VicoaMcp:
         except ControlPlaneError as exc:
             _fail(exc)
 
+    async def deliver_messages(self, task_id: int) -> dict[str, Any]:
+        _task_or_refuse(self.plane, task_id)
+        worker = self.workers.get(int(task_id))
+        if worker is None:
+            raise ToolError("state: no active MCP-owned worker")
+        try:
+            delivered = await worker.deliver_queued()
+            return _public({"task_id": int(task_id), "delivered": delivered})
+        except ControlPlaneError as exc:
+            _fail(exc)
+
+    async def start_worker(self, task_id: int) -> dict[str, Any]:
+        task = _task_or_refuse(self.plane, task_id)
+        if int(task_id) in self.workers:
+            raise ToolError("state: worker already active")
+        try:
+            job = self.plane.job(int(task["job_id"]))
+            cwd = Path(str(job["project"])).resolve()
+            if not cwd.is_dir():
+                raise ToolError("worktree: job project directory does not exist")
+            worker = AntigravityTaskWorker(self.plane, int(task_id), cwd=cwd)
+            state = await worker.start()
+            self.workers[int(task_id)] = worker
+            if str(task.get("prompt") or "").strip():
+                await worker.deliver(str(task["prompt"]))
+            delivered = await worker.deliver_queued()
+            return _public({"state": worker.state(), "initial_state": state, "delivered": delivered})
+        except ControlPlaneError as exc:
+            self.workers.pop(int(task_id), None)
+            _fail(exc)
+        except Exception:
+            worker = self.workers.pop(int(task_id), None)
+            if worker is not None:
+                await worker.aclose()
+            raise
+
+    async def finish_worker(self, task_id: int, checks: list[dict[str, Any]]) -> dict[str, Any]:
+        _task_or_refuse(self.plane, task_id)
+        worker = self.workers.get(int(task_id))
+        if worker is None:
+            raise ToolError("state: no active MCP-owned worker")
+        try:
+            result = await worker.finish(checks, output="completed through ChatGPT Vicoa MCP")
+            return _public(result)
+        except ControlPlaneError as exc:
+            _fail(exc)
+        finally:
+            self.workers.pop(int(task_id), None)
+
     def patch_task_prefs(self, task_id: int, fields: dict[str, str]) -> dict[str, Any]:
         _task_or_refuse(self.plane, task_id)
         unknown = set(fields) - PATCH_FIELDS
@@ -363,6 +414,9 @@ def build_server(adapter: VicoaMcp) -> MCPServer:
     write("vicoa_heartbeat_job", "Heartbeat Vicoa job", adapter.heartbeat_job)
     write("vicoa_submit_plan", "Submit Vicoa plan", adapter.submit_plan)
     write("vicoa_message_worker", "Message Vicoa worker", adapter.message_worker)
+    write("vicoa_deliver_messages", "Deliver queued Vicoa worker messages", adapter.deliver_messages)
+    write("vicoa_start_worker", "Start a Vicoa Antigravity worker", adapter.start_worker)
+    write("vicoa_finish_worker", "Finish and verify a Vicoa worker", adapter.finish_worker)
     write("vicoa_patch_task_prefs", "Patch Vicoa task preferences", adapter.patch_task_prefs)
     write("vicoa_approve_once", "Approve once", adapter.approve_once)
     write("vicoa_deny", "Deny approval", adapter.deny)
